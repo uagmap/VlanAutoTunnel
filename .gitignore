@@ -1,0 +1,14 @@
+# venv / cache
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+
+# environment
+.env
+config.yaml
+
+# local artifacts / large files
+CONTINUITY.md
+*.log
+CODE_GUIDE.md

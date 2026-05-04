@@ -1,0 +1,43 @@
+log_directory: logs
+
+# Credentials are loaded from environment variables.
+# The app automatically reads a .env file from this same directory.
+telnet:
+  username_env: VLAN_TELNET_USERNAME
+  password_env: VLAN_TELNET_PASSWORD
+  secret_env: VLAN_TELNET_SECRET
+  port: 23
+  timeout_seconds: 20
+  global_delay_factor: 1.5
+
+zabbix:
+  enabled: true
+  url_env: VLAN_ZABBIX_URL
+  # Prefer API token. If set, username/password are not required.
+  api_token_env: VLAN_ZABBIX_API_TOKEN
+  # Optional fallback when token is unavailable:
+  username_env: VLAN_ZABBIX_USERNAME
+  password_env: VLAN_ZABBIX_PASSWORD
+  search_field: host
+
+# Global candidate ranges used for every L3 switch.
+# The workflow should try these ranges in order and fail only when both are full.
+vlan_ranges:
+  - start: 116
+    end: 299
+  - start: 1025
+    end: 1299
+
+# Optional site-specific overrides. Leave empty if all sites are the same.
+sites: []
+
+# For large fleets, keep inventory empty and resolve all switches through Zabbix.
+inventory: []
+
+vendors:
+  cisco_ios:
+    notes: Cisco defaults are pre-wired in code.
+  snr:
+    notes: SNR parsing is implemented from provided samples.
+  eltex_mes:
+    notes: Eltex MES parsing is implemented from provided samples.

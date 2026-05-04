@@ -1,0 +1,11 @@
+# VLAN Tunnel Automation
+# Python dependencies
+
+# Switch connectivity
+netmiko>=4.4.0
+
+# Zabbix API client
+pyzabbix>=1.3.1
+
+# YAML configuration parsing
+PyYAML>=6.0
