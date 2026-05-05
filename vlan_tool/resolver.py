@@ -20,9 +20,18 @@ class SwitchResolver:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self._inventory_index = {}
+        self._l3_subnet_overrides: list[tuple[ipaddress.IPv4Network, str]] = []
         for switch in config.inventory:
             for name in switch.all_names:
                 self._inventory_index[name.casefold()] = switch
+        for rule in config.l3_mapping.overrides:
+            try:
+                network = ipaddress.ip_network(rule.subnet, strict=False)
+            except ValueError:
+                continue
+            if not isinstance(network, ipaddress.IPv4Network):
+                continue
+            self._l3_subnet_overrides.append((network, rule.l3_ip))
 
     def resolve(self, query: str) -> SwitchRecord:
         direct_match = self._inventory_index.get(query.casefold())
@@ -59,6 +68,19 @@ class SwitchResolver:
         if override:
             resolved = self.resolve(override)
             return resolved, f"manual override ({override})"
+
+        override_match = self._derive_l3_from_overrides(switch.host)
+        if override_match:
+            l3_ip, source_subnet = override_match
+            resolved = self._resolve_existing_l3_candidate(l3_ip)
+            if not resolved:
+                return (
+                    None,
+                    "configured L3 override "
+                    f"{source_subnet} -> {l3_ip} matched {switch.host}, "
+                    "but the L3 candidate was not found in Zabbix/inventory",
+                )
+            return resolved, f"configured override {source_subnet} -> {l3_ip}"
 
         derived_ip = derive_l3_ip_from_switch_ip(switch.host)
         if not derived_ip:
@@ -199,6 +221,28 @@ class SwitchResolver:
             if switch.host == ip_address:
                 return switch
         return None
+
+    def _derive_l3_from_overrides(self, host: str) -> tuple[str, str] | None:
+        if not self._l3_subnet_overrides:
+            return None
+        try:
+            candidate_ip = ipaddress.ip_address(host)
+        except ValueError:
+            return None
+        if not isinstance(candidate_ip, ipaddress.IPv4Address):
+            return None
+
+        chosen_network: ipaddress.IPv4Network | None = None
+        chosen_l3_ip: str | None = None
+        for network, l3_ip in self._l3_subnet_overrides:
+            if candidate_ip not in network:
+                continue
+            if chosen_network is None or network.prefixlen > chosen_network.prefixlen:
+                chosen_network = network
+                chosen_l3_ip = l3_ip
+        if chosen_network is None or chosen_l3_ip is None:
+            return None
+        return chosen_l3_ip, str(chosen_network)
 
 
 def _zabbix_login(client: ZabbixAPI, config: AppConfig) -> None:

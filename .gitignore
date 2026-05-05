@@ -11,4 +11,5 @@ config.yaml
 # local artifacts / large files
 CONTINUITY.md
 *.log
+*.txt
 CODE_GUIDE.md

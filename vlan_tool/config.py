@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+import ipaddress
 from pathlib import Path
 
 from vlan_tool.models import (
     AppConfig,
+    L3MappingSettings,
+    L3SubnetOverride,
     SiteDefinition,
     SwitchRecord,
     TelnetSettings,
@@ -36,10 +39,13 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     telnet_raw = raw.get("telnet", {})
     zabbix_raw = raw.get("zabbix", {})
+    l3_mapping_raw = raw.get("l3_mapping", {}) or {}
     inventory_raw = raw.get("inventory", []) or []
     sites_raw = raw.get("sites", []) or []
     vlan_ranges_raw = raw.get("vlan_ranges", []) or []
 
+    if not isinstance(l3_mapping_raw, dict):
+        raise ValueError("Config key 'l3_mapping' must be a mapping.")
     if not isinstance(inventory_raw, list):
         raise ValueError("Config key 'inventory' must be a list.")
     if not isinstance(sites_raw, list):
@@ -128,12 +134,16 @@ def load_config(path: Path | None = None) -> AppConfig:
     parsed_sites = [_parse_site(item) for item in sites_raw]
     sites = {site.name: site for site in parsed_sites}
     vlan_ranges = _parse_vlan_ranges(vlan_ranges_raw, context="vlan_ranges")
+    l3_mapping = L3MappingSettings(
+        overrides=_parse_l3_overrides(l3_mapping_raw.get("overrides", [])),
+    )
 
     return AppConfig(
         path=config_path,
         log_directory=(config_path.parent / raw.get("log_directory", "logs")).resolve(),
         telnet=telnet,
         zabbix=zabbix,
+        l3_mapping=l3_mapping,
         vlan_ranges=vlan_ranges,
         inventory=inventory,
         sites=sites,
@@ -205,6 +215,60 @@ def _parse_vlan_ranges(raw_ranges: list, *, context: str) -> list[VlanRange]:
             )
         ranges.append(VlanRange(start=start, end=end))
     return ranges
+
+
+def _parse_l3_overrides(raw_overrides: object) -> list[L3SubnetOverride]:
+    if raw_overrides is None:
+        return []
+    if not isinstance(raw_overrides, list):
+        raise ValueError("Config key 'l3_mapping.overrides' must be a list.")
+
+    overrides: list[L3SubnetOverride] = []
+    for index, item in enumerate(raw_overrides):
+        if not isinstance(item, dict):
+            raise ValueError(
+                "Each item in 'l3_mapping.overrides' must be a mapping. "
+                f"Failed at index {index}."
+            )
+        if "subnet" not in item or "l3_ip" not in item:
+            raise ValueError(
+                "Each item in 'l3_mapping.overrides' must contain "
+                f"'subnet' and 'l3_ip'. Failed at index {index}."
+            )
+
+        subnet_raw = str(item["subnet"]).strip()
+        l3_ip_raw = str(item["l3_ip"]).strip()
+        try:
+            network = ipaddress.ip_network(subnet_raw, strict=False)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid subnet '{subnet_raw}' in 'l3_mapping.overrides' at index {index}."
+            ) from exc
+        if network.version != 4:
+            raise ValueError(
+                f"Only IPv4 subnets are supported in 'l3_mapping.overrides'. "
+                f"Failed at index {index} ({subnet_raw})."
+            )
+
+        try:
+            l3_ip = ipaddress.ip_address(l3_ip_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid l3_ip '{l3_ip_raw}' in 'l3_mapping.overrides' at index {index}."
+            ) from exc
+        if l3_ip.version != 4:
+            raise ValueError(
+                f"Only IPv4 l3_ip is supported in 'l3_mapping.overrides'. "
+                f"Failed at index {index} ({l3_ip_raw})."
+            )
+
+        overrides.append(
+            L3SubnetOverride(
+                subnet=str(network),
+                l3_ip=str(l3_ip),
+            )
+        )
+    return overrides
 
 
 def _read_secret_setting(

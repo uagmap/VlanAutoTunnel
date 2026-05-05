@@ -42,6 +42,17 @@ class SiteDefinition:
 
 
 @dataclass(slots=True)
+class L3SubnetOverride:
+    subnet: str
+    l3_ip: str
+
+
+@dataclass(slots=True)
+class L3MappingSettings:
+    overrides: list[L3SubnetOverride] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class SwitchRecord:
     name: str
     host: str
@@ -64,6 +75,7 @@ class AppConfig:
     log_directory: Path
     telnet: TelnetSettings
     zabbix: ZabbixSettings
+    l3_mapping: L3MappingSettings = field(default_factory=L3MappingSettings)
     vlan_ranges: list[VlanRange] = field(default_factory=list)
     inventory: list[SwitchRecord] = field(default_factory=list)
     sites: dict[str, SiteDefinition] = field(default_factory=dict)

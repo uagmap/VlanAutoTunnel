@@ -80,6 +80,17 @@ zabbix:
   password_env: VLAN_ZABBIX_PASSWORD
   search_field: host
 
+l3_mapping:
+  overrides:
+    - subnet: 10.7.101.0/24
+      l3_ip: 10.1.1.1
+    - subnet: 10.7.202.0/24
+      l3_ip: 10.1.1.1
+    - subnet: 10.7.30.0/24
+      l3_ip: 10.1.1.1
+    - subnet: 10.7.108.0/24
+      l3_ip: 10.1.1.8
+
 vlan_ranges:
   - start: 116
     end: 299
@@ -95,6 +106,8 @@ Notes:
 
 - Secrets should stay in `.env`, not hardcoded in `config.yaml`.
 - If `zabbix.enabled: true`, you must provide URL plus either API token or username/password.
+- `l3_mapping.overrides` is evaluated before the default L3 derivation rule.
+- If multiple override subnets match, the most specific CIDR (largest prefix length) wins.
 
 ## CLI Usage
 
@@ -176,6 +189,21 @@ python zabbix_name_ip_resolver.py hostname-to-ip SWITCH_QUERY
 python zabbix_name_ip_resolver.py ip-to-hostname 10.1.1.10
 python zabbix_name_ip_resolver.py search PARTIAL_NAME
 ```
+
+There is also `generate_l3_overrides.py` to suggest irregular `l3_mapping.overrides` entries:
+
+```powershell
+python generate_l3_overrides.py --config config.yaml --output l3_mapping_overrides.txt --debug
+```
+
+By default it skips `10.1.1.17` and `10.1.1.254`.
+You can add more exclusions:
+
+```powershell
+python generate_l3_overrides.py --exclude-l3 10.1.1.200 --exclude-l3 10.1.1.201
+```
+
+The helper only considers `10.7.x.y` addresses on `Vlan111` that have `/24` mask (`255.255.255.0`) when generating overrides. This avoids false mappings from transit/service subnets like `/30` or `/26`.
 
 ## Troubleshooting
 

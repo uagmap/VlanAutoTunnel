@@ -20,6 +20,20 @@ zabbix:
   password_env: VLAN_ZABBIX_PASSWORD
   search_field: host
 
+# Optional L3 mapping overrides for irregular topologies.
+# These rules are checked before the default mapping rule (10.7.X.Y -> 10.1.1.X).
+# Use CIDR subnets on the left and explicit L3 management IP on the right.
+l3_mapping:
+  overrides:
+    - subnet: 10.7.101.0/24
+      l3_ip: 10.1.1.1
+    - subnet: 10.7.202.0/24
+      l3_ip: 10.1.1.1
+    - subnet: 10.7.30.0/24
+      l3_ip: 10.1.1.1
+    - subnet: 10.7.108.0/24
+      l3_ip: 10.1.1.8
+
 # Global candidate ranges used for every L3 switch.
 # The workflow should try these ranges in order and fail only when both are full.
 vlan_ranges:
