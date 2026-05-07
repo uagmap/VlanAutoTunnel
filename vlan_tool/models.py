@@ -86,7 +86,7 @@ class AppConfig:
 class ProvisioningRequest:
     l3_switch: str | None
     destination_switch: str
-    destination_port: str
+    destination_port: str | None
     target_mac: str | None = None
     requested_vlan: int | None = None
 

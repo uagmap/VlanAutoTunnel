@@ -358,13 +358,19 @@ def _run_plan(
 ) -> int:
     effective_request = request
     if not request.target_mac:
-        discovered = _discover_target_mac(config, request, confirm_steps=confirm_steps, debug=debug)
+        discovered, discovery_source = _discover_target_mac(
+            config,
+            request,
+            confirm_steps=confirm_steps,
+            debug=debug,
+        )
         if not discovered:
             raise RuntimeError(
-                "Unable to auto-discover MAC on destination port for this switch/port."
+                "Unable to auto-discover destination MAC. "
+                "Provide a destination port or verify switch self-MAC visibility."
             )
         effective_request = replace(request, target_mac=discovered)
-        print(f"Auto-discovered target MAC: {discovered}")
+        print(f"Auto-discovered target MAC ({discovery_source}): {discovered}")
 
     for line in _execute_live_path_plan(
         config,
@@ -386,13 +392,19 @@ def _run_deploy(
 ) -> int:
     effective_request = request
     if not request.target_mac:
-        discovered = _discover_target_mac(config, request, confirm_steps=confirm_steps, debug=debug)
+        discovered, discovery_source = _discover_target_mac(
+            config,
+            request,
+            confirm_steps=confirm_steps,
+            debug=debug,
+        )
         if not discovered:
             raise RuntimeError(
-                "Unable to auto-discover MAC on destination port for this switch/port."
+                "Unable to auto-discover destination MAC. "
+                "Provide a destination port or verify switch self-MAC visibility."
             )
         effective_request = replace(request, target_mac=discovered)
-        print(f"Auto-discovered target MAC: {discovered}")
+        print(f"Auto-discovered target MAC ({discovery_source}): {discovered}")
 
     for line in _execute_live_path_plan(
         config,
@@ -419,7 +431,8 @@ def _execute_live_path_plan(
     _debug_note(
         debug,
         f"Starting {'deploy' if apply_changes else 'plan'} for destination "
-        f"{destination_switch.name} ({destination_switch.host}) port {request.destination_port}",
+        f"{destination_switch.name} ({destination_switch.host}) "
+        f"{f'port {request.destination_port}' if request.destination_port else '(switch-self-MAC mode)'}",
     )
 
     if request.l3_switch:
@@ -688,12 +701,14 @@ def _execute_live_path_plan(
                 target_entries = current_driver.lookup_mac(session, request.target_mac or "")
                 destination_entry = _pick_downlink_entry(target_entries)
                 if destination_entry:
-                    if current_driver.normalize_interface(destination_entry.interface) != current_driver.normalize_interface(
-                        request.destination_port
-                    ):
-                        notes.append(
-                            f"Destination MAC currently appears on {destination_entry.interface}, not requested port {request.destination_port}."
-                        )
+                    if request.destination_port:
+                        if current_driver.normalize_interface(
+                            destination_entry.interface
+                        ) != current_driver.normalize_interface(request.destination_port):
+                            notes.append(
+                                f"Destination MAC currently appears on {destination_entry.interface}, "
+                                f"not requested port {request.destination_port}."
+                            )
                 else:
                     notes.append("Destination MAC was not visible on destination switch during this trace.")
             else:
@@ -778,6 +793,7 @@ def _execute_live_path_plan(
     lines = _render_live_path_plan(
         destination_switch=destination_switch,
         destination_driver=destination_driver.vendor_key,
+        destination_port=request.destination_port,
         l3_switch=l3_switch,
         l3_driver=l3_driver.vendor_key,
         l3_source=l3_source,
@@ -798,6 +814,7 @@ def _render_live_path_plan(
     *,
     destination_switch: SwitchRecord,
     destination_driver: str,
+    destination_port: str | None,
     l3_switch: SwitchRecord,
     l3_driver: str,
     l3_source: str,
@@ -815,6 +832,7 @@ def _render_live_path_plan(
         f"L3 switch: {l3_switch.name} ({l3_switch.host}) via {l3_driver}",
         f"L3 selection source: {l3_source}",
         f"Destination switch: {destination_switch.name} ({destination_switch.host}) via {destination_driver}",
+        f"Destination MAC source: {f'port {destination_port}' if destination_port else 'switch self MAC'}",
         f"Destination MAC: {target_mac}",
         f"L3 trace MAC: {l3_trace_mac}",
         f"Selected VLAN: {chosen_vlan} ({chosen_vlan_reason})",
@@ -1657,7 +1675,12 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "destination_port",
-        help="Destination switch port (for MAC auto-discovery).",
+        nargs="?",
+        default=None,
+        help=(
+            "Optional destination switch port for client-MAC discovery. "
+            "If omitted, tool uses destination switch self-MAC."
+        ),
     )
     parser.add_argument(
         "--l3",
@@ -1681,15 +1704,10 @@ def _discover_target_mac(
     *,
     confirm_steps: bool,
     debug: bool,
-) -> str | None:
+) -> tuple[str | None, str]:
     resolver = SwitchResolver(config)
     destination_switch = resolver.resolve(request.destination_switch)
     driver = get_driver(destination_switch.vendor)
-    if not driver.capabilities.mac_lookup_by_interface:
-        raise RuntimeError(
-            f"Vendor driver '{driver.vendor_key}' cannot auto-discover MACs by interface yet. "
-            "This platform needs interface MAC lookup support before plan/deploy can run automatically."
-        )
 
     with open_switch_session(
         config,
@@ -1699,12 +1717,86 @@ def _discover_target_mac(
         debug=debug,
     ) as session:
         driver.prepare_session(session)
-        entries = driver.lookup_interface_macs(session, request.destination_port)
-        print(f"Session log (destination MAC discovery): {session.session_log}")
-        if not entries:
-            return None
-        selected = _select_preferred_mac_entry(entries)
-        return selected.mac_address
+        if request.destination_port:
+            if not driver.capabilities.mac_lookup_by_interface:
+                raise RuntimeError(
+                    f"Vendor driver '{driver.vendor_key}' cannot auto-discover MACs by interface yet. "
+                    "This platform needs interface MAC lookup support before plan/deploy can run automatically."
+                )
+            entries = driver.lookup_interface_macs(session, request.destination_port)
+            print(f"Session log (destination MAC discovery): {session.session_log}")
+            if not entries:
+                return None, f"port {request.destination_port}"
+            selected = _select_preferred_mac_entry(entries)
+            return selected.mac_address, f"port {request.destination_port}"
+
+        discovered = _discover_switch_self_mac(
+            session=session,
+            driver=driver,
+            switch=destination_switch,
+        )
+        print(f"Session log (destination self-MAC discovery): {session.session_log}")
+        return discovered, "switch self MAC"
+
+
+def _discover_switch_self_mac(*, session, driver, switch: SwitchRecord) -> str | None:
+    if driver.vendor_key in {"cisco_ios", "arista"}:
+        return _discover_l3_trace_mac(session=session, driver=driver, switch=switch)
+
+    if driver.vendor_key == "snr":
+        output = session.run_timing("show mac-address-table | i CPU")
+        if not output.strip() or _looks_like_invalid_command(output):
+            output = session.run_timing("show mac-address-table")
+        return _extract_preferred_switch_mac(
+            output,
+            require_any_keywords=("cpu", "system"),
+        )
+
+    if driver.vendor_key == "eltex_mes":
+        output = session.run_timing("show mac address-table | i self")
+        if not output.strip() or _looks_like_invalid_command(output):
+            output = session.run_timing("show mac address-table")
+        return _extract_preferred_switch_mac(
+            output,
+            require_any_keywords=("self",),
+        )
+
+    return None
+
+
+def _extract_preferred_switch_mac(
+    output: str,
+    *,
+    require_any_keywords: tuple[str, ...],
+) -> str | None:
+    candidates: list[tuple[int, str]] = []
+    for line in output.splitlines():
+        line_text = line.strip()
+        if not line_text:
+            continue
+        lower = line_text.casefold()
+        if require_any_keywords and not any(keyword in lower for keyword in require_any_keywords):
+            continue
+        mac_match = re.search(
+            r"([0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}|[0-9A-Fa-f]{2}(?:[-:][0-9A-Fa-f]{2}){5})",
+            line_text,
+        )
+        if not mac_match:
+            continue
+
+        score = 0
+        if "111" in lower:
+            score += 40
+        if "static" in lower:
+            score += 20
+        for keyword in require_any_keywords:
+            if keyword in lower:
+                score += 50
+        candidates.append((score, mac_match.group(1)))
+
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
 
 
 def _select_preferred_mac_entry(entries: list[MacTableEntry]) -> MacTableEntry:

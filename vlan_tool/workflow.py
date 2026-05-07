@@ -27,7 +27,7 @@ def build_plan(config: AppConfig, request: ProvisioningRequest) -> list[str]:
         f"L3 switch: {l3_switch.name} ({l3_switch.host}) via {l3_driver.vendor_key}",
         f"L3 selection source: {l3_source}",
         f"Destination switch: {destination_switch.name} ({destination_switch.host}) via {destination_driver.vendor_key}",
-        f"Destination port: {request.destination_port}",
+        f"Destination port: {request.destination_port or 'not provided (switch self MAC mode)'}",
         f"Observed MAC: {request.target_mac or 'auto-discovered from destination port'}",
         f"VLAN description: {request.vlan_description or 'free (default)'}",
     ]
