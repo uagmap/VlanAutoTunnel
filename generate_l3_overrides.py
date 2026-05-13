@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vlan_tool.config import DEFAULT_CONFIG_PATH, load_config
+from vlan_tool.config import load_config
 from vlan_tool.models import AppConfig, SwitchRecord
 from vlan_tool.session import open_switch_session
 from vlan_tool.vendors import get_driver
@@ -31,7 +31,7 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = load_config()
     if not config.zabbix.is_configured():
         raise RuntimeError(
             "Zabbix is not configured/enabled in config. "
@@ -98,12 +98,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "Generate l3_mapping.overrides suggestions by scanning L3 switches "
             "from Zabbix (10.1.1.x) and parsing 'show run int vlan 111'."
         )
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG_PATH,
-        help="Path to main YAML config file (default: config.yaml).",
     )
     parser.add_argument(
         "--output",

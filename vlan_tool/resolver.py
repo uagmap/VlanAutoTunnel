@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import ipaddress
 import re
 
@@ -19,11 +20,14 @@ except ImportError:  # pragma: no cover - optional until dependencies are instal
 class SwitchResolver:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self._inventory: list[SwitchRecord] = []
         self._inventory_index = {}
         self._l3_subnet_overrides: list[tuple[ipaddress.IPv4Network, str]] = []
         for switch in config.inventory:
+            normalized_switch = _normalize_inventory_switch_vendor(switch)
+            self._inventory.append(normalized_switch)
             for name in switch.all_names:
-                self._inventory_index[name.casefold()] = switch
+                self._inventory_index[name.casefold()] = normalized_switch
         for rule in config.l3_mapping.overrides:
             try:
                 network = ipaddress.ip_network(rule.subnet, strict=False)
@@ -217,7 +221,7 @@ class SwitchResolver:
             return None
 
     def _resolve_ip_from_inventory(self, ip_address: str) -> SwitchRecord | None:
-        for switch in self.config.inventory:
+        for switch in self._inventory:
             if switch.host == ip_address:
                 return switch
         return None
@@ -243,6 +247,13 @@ class SwitchResolver:
         if chosen_network is None or chosen_l3_ip is None:
             return None
         return chosen_l3_ip, str(chosen_network)
+
+
+def _normalize_inventory_switch_vendor(switch: SwitchRecord) -> SwitchRecord:
+    model = str(switch.name or "").strip().casefold().split(".", 1)[0]
+    if switch.vendor == "snr" and re.match(r"^(?:snr-)?s5\d", model):
+        return replace(switch, vendor="snr_s5xxx")
+    return switch
 
 
 def _zabbix_login(client: ZabbixAPI, config: AppConfig) -> None:
@@ -306,6 +317,10 @@ def _is_ip_address(value: str) -> bool:
 def _infer_vendor_from_name(hostname: str) -> str:
     token = hostname.strip().casefold()
     model = token.split(".", 1)[0]
+    if "bdcom" in model:
+        return "bdcom"
+    if re.match(r"^(?:snr-)?s5\d", model):
+        return "snr_s5xxx"
     if model.startswith("snr"):
         return "snr"
     if model.startswith("mes"):

@@ -4,13 +4,14 @@ import argparse
 from dataclasses import dataclass, replace
 import ipaddress
 import re
-from pathlib import Path
 
-from vlan_tool.config import DEFAULT_CONFIG_PATH, load_config
+from vlan_tool.config import load_config
 from vlan_tool.models import MacTableEntry, ProvisioningRequest, SwitchRecord, VlanRange
 from vlan_tool.resolver import SwitchResolver
 from vlan_tool.session import open_switch_session
 from vlan_tool.vendors import get_driver
+from vlan_tool.vendors.bdcom import extract_bdcom_base_mac_from_version
+from vlan_tool.vendors.snr_s5xxx import extract_snr_s5_vlan_mac_from_version
 
 try:
     from netmiko.exceptions import (
@@ -55,12 +56,6 @@ class _HopReport:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Terminal tool for VLAN tunnel automation across mixed-vendor switches."
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG_PATH,
-        help="Path to the YAML config file.",
     )
     parser.add_argument(
         "--confirm-steps",
@@ -165,7 +160,7 @@ def main() -> int:
     try:
         args = parser.parse_args()
 
-        config = load_config(args.config)
+        config = load_config()
 
         if args.command == "resolve":
             return _run_resolve(config, args.query)
@@ -283,7 +278,7 @@ def _run_probe(
         for command in driver.probe_commands():
             print("")
             print(f"$ {command}")
-            if driver.vendor_key in {"generic_telnet", "snr", "eltex_mes", "arista"}:
+            if driver.vendor_key in {"generic_telnet", "snr", "snr_s5xxx", "eltex_mes", "arista"}:
                 output = session.run_timing(command)
                 if _looks_like_login_output(output):
                     raise RuntimeError(
@@ -513,7 +508,12 @@ def _execute_live_path_plan(
                 driver=l3_driver,
                 interface=l3_downlink.interface,
             )
-        l3_neighbor = _resolve_neighbor_from_description(resolver, l3_description)
+        l3_neighbor = _resolve_neighbor_from_description(
+            resolver,
+            l3_description,
+            source_switch=l3_switch,
+            debug=debug,
+        )
 
         l3_snapshot = ""
         l3_exists = False
@@ -719,6 +719,12 @@ def _execute_live_path_plan(
                         f"{current_switch.name} did not find destination MAC {request.target_mac} in MAC table."
                     )
                 downlink_interface = downlink_entry.interface
+                if _is_sensitive_olt_terminal_interface(downlink_interface):
+                    raise RuntimeError(
+                        "Aborting automatic deploy on sensitive ONU terminal interface "
+                        f"{downlink_interface} at {current_switch.name} ({current_switch.host}). "
+                        "This endpoint type requires dedicated ONU-safe workflow."
+                    )
                 downlink_tagged = _snapshot_interface_tagged(
                     driver=current_driver,
                     vlan_id=chosen_vlan,
@@ -744,7 +750,12 @@ def _execute_live_path_plan(
                         driver=current_driver,
                         interface=downlink_interface,
                     )
-                neighbor_switch = _resolve_neighbor_from_description(resolver, downlink_description)
+                neighbor_switch = _resolve_neighbor_from_description(
+                    resolver,
+                    downlink_description,
+                    source_switch=current_switch,
+                    debug=debug,
+                )
                 if not neighbor_switch:
                     raise RuntimeError(
                         f"Unable to resolve next-hop from {current_switch.name} "
@@ -971,7 +982,9 @@ def _build_config_entry_attempts(vendor_key: str, preferred: str) -> list[str]:
         "cisco_ios": ["conf t", "configure terminal"],
         "arista": ["conf t", "configure terminal"],
         "snr": ["config terminal", "configure terminal"],
+        "snr_s5xxx": ["conf", "config", "configure terminal", "conf t", "config terminal"],
         "eltex_mes": ["configure terminal", "config terminal", "conf t"],
+        "bdcom": ["conf", "configure terminal", "config terminal", "conf t"],
     }.get(vendor_key, ["configure terminal", "conf t", "config terminal"])
     for candidate in candidates:
         if candidate.casefold() == preferred_text.casefold():
@@ -995,7 +1008,7 @@ def _looks_like_config_prompt(text: str) -> bool:
         return False
     return bool(
         re.search(
-            r"\(config(?:-[^)]+)?\)\s*[>#]\s*$",
+            r"(?:\(config(?:-[^)]+)?\)|_config(?:_[^#>\s]+)?)\s*[>#]\s*$",
             text.strip(),
             flags=re.IGNORECASE | re.MULTILINE,
         )
@@ -1054,7 +1067,7 @@ def _extract_action_payload(commands: list[str]) -> tuple[list[str], str | None]
 
 def _is_config_enter_command(command: str) -> bool:
     text = command.strip().casefold()
-    return text in {"conf t", "configure terminal", "config terminal"}
+    return text in {"conf", "conf t", "configure terminal", "config terminal"}
 
 
 def _split_action_commands(action: str) -> list[str]:
@@ -1105,23 +1118,34 @@ def _is_benign_command_failure(*, command: str, output: str, vendor_key: str) ->
 
 
 def _save_running_config_if_needed(*, session, switch: SwitchRecord, debug: bool) -> int:
-    if switch.vendor not in {"eltex_mes", "snr"}:
+    if switch.vendor not in {"eltex_mes", "snr", "snr_s5xxx", "bdcom"}:
         return 0
 
     _debug_note(debug, f"Saving running-config on {switch.name} ({switch.host})")
     executed = 0
 
-    output = session.run_timing("write")
-    executed += 1
-    if _looks_like_command_failure(output):
-        output = session.run_timing("wr")
+    if switch.vendor == "bdcom":
+        save_commands = ["wr all", "write all", "wr", "write"]
+    else:
+        save_commands = ["write", "wr"]
+
+    output = ""
+    success = False
+    for command in save_commands:
+        output = session.run_timing(command)
         executed += 1
         if _looks_like_command_failure(output):
-            raise RuntimeError(
-                "Deployment failed on "
-                f"{switch.name} ({switch.host}) while running save command ('write'/'wr'). "
-                "Review session log for details."
-            )
+            continue
+        success = True
+        break
+
+    if not success:
+        raise RuntimeError(
+            "Deployment failed on "
+            f"{switch.name} ({switch.host}) while running save command "
+            f"({', '.join(repr(cmd) for cmd in save_commands)}). "
+            "Review session log for details."
+        )
 
     if _looks_like_write_confirmation_prompt(output):
         confirm_output = session.run_timing("y", confirm_label="confirm write")
@@ -1194,6 +1218,12 @@ def _discover_l3_trace_mac(*, session, driver, switch: SwitchRecord | None = Non
             output = session.run_timing("show mac-address-table vlan 111")
         if _looks_like_invalid_command(output):
             output = session.run_timing("show mac-address-table")
+    elif driver.vendor_key == "snr_s5xxx":
+        output = session.run_timing("show mac address-table | i CPU")
+        if _looks_like_invalid_command(output):
+            output = session.run_timing("show mac address-table vlan 111")
+        if _looks_like_invalid_command(output):
+            output = session.run_timing("show mac address-table")
     elif driver.vendor_key == "eltex_mes":
         output = session.run_timing("show mac address-table vlan 111")
         if _looks_like_invalid_command(output):
@@ -1296,6 +1326,13 @@ def _pick_uplink_entry(entries: list[MacTableEntry]) -> MacTableEntry | None:
     return sorted(entries, key=score, reverse=True)[0]
 
 
+def _is_sensitive_olt_terminal_interface(interface: str | None) -> bool:
+    if not interface:
+        return False
+    normalized = interface.strip().casefold().replace(" ", "")
+    return bool(re.match(r"^(?:epon|gpon)\d+/\d+:\d+$", normalized))
+
+
 def _lookup_interface_description(
     *,
     statuses: dict[str, object],
@@ -1343,20 +1380,41 @@ def _build_interface_description_commands(vendor_key: str, interface: str) -> li
             f"show run int eth{normalized}",
             f"show run int {_to_snr_ethernet_name(interface)}",
         ]
+    if vendor_key == "snr_s5xxx":
+        compact = raw.lower().replace(" ", "")
+        return [
+            f"show running-config interface {compact}",
+            f"show run interface {compact}",
+            f"show run int {compact}",
+            f"show run int {raw}",
+        ]
     if vendor_key == "eltex_mes":
         return [f"show run int {raw.lower().replace(' ', '')}"]
     if vendor_key == "arista":
         return [f"show run int {raw.lower().replace(' ', '')}"]
+    if vendor_key == "bdcom":
+        compact = raw.lower().replace(" ", "")
+        return [
+            f"show running-config interface {compact}",
+            f"show run interface {compact}",
+            f"show run int {compact}",
+        ]
     return [f"show run int {raw}"]
 
 
 def _run_vendor_show_command(*, session, vendor_key: str, command: str) -> str:
-    if vendor_key in {"snr", "eltex_mes", "arista"}:
+    if vendor_key in {"snr", "snr_s5xxx", "eltex_mes", "arista", "bdcom"}:
         return session.run_timing(command)
     return session.run_show(command)
 
 
-def _resolve_neighbor_from_description(resolver: SwitchResolver, description: str | None) -> SwitchRecord | None:
+def _resolve_neighbor_from_description(
+    resolver: SwitchResolver,
+    description: str | None,
+    *,
+    source_switch: SwitchRecord | None = None,
+    debug: bool = False,
+) -> SwitchRecord | None:
     if not description:
         return None
     base = description.strip().strip("\"'`")
@@ -1364,15 +1422,36 @@ def _resolve_neighbor_from_description(resolver: SwitchResolver, description: st
         return None
 
     candidates = _build_neighbor_resolution_candidates(base)
-
+    best: tuple[int, str, SwitchRecord] | None = None
     for candidate in candidates:
         try:
             resolved = resolver.resolve(candidate)
         except LookupError:
             continue
-        if _is_confident_neighbor_match(base, resolved):
-            return resolved
-    return None
+        score = _score_neighbor_match(
+            description=base,
+            switch=resolved,
+            source_switch=source_switch,
+        )
+        if score < 100:
+            if debug:
+                _debug_note(
+                    debug,
+                    "Rejected weak neighbor candidate "
+                    f"'{candidate}' -> {resolved.name} ({resolved.host}) score={score}",
+                )
+            continue
+        if best is None or score > best[0]:
+            best = (score, candidate, resolved)
+
+    if best and debug:
+        _, candidate, resolved = best
+        _debug_note(
+            debug,
+            "Resolved next hop from description "
+            f"'{base}' via candidate '{candidate}' -> {resolved.name} ({resolved.host})",
+        )
+    return best[2] if best else None
 
 
 def _build_neighbor_resolution_candidates(description: str) -> list[str]:
@@ -1423,6 +1502,124 @@ def _is_confident_neighbor_match(description: str, switch: SwitchRecord) -> bool
     return False
 
 
+def _score_neighbor_match(
+    *,
+    description: str,
+    switch: SwitchRecord,
+    source_switch: SwitchRecord | None,
+) -> int:
+    if not _is_confident_neighbor_match(description, switch):
+        return 0
+
+    blob_parts = [switch.name, switch.host, *(switch.aliases or [])]
+    blob = " ".join(part for part in blob_parts if part).casefold()
+    probe = description.casefold()
+    score = 100
+
+    if probe == switch.host.casefold():
+        score += 500
+    elif probe in blob:
+        score += 240
+
+    id_token = _extract_id_token(probe)
+    if id_token:
+        if id_token in blob:
+            score += 360
+        else:
+            return 0
+
+    tokens = _description_tokens_for_match(probe)
+    matched = [token for token in tokens if token in blob]
+    score += 45 * len(matched)
+    if matched:
+        score += max(len(token) for token in matched)
+
+    if source_switch:
+        if _looks_like_map_mismatch(
+            source_switch=source_switch,
+            candidate_switch=switch,
+            description=probe,
+            has_id_token=bool(id_token),
+        ):
+            # Fail-safe bias: avoid silent jumps to unrelated map names.
+            score -= 320
+        if _in_same_switch_pool(source_switch.host, switch.host):
+            score += 40
+
+    return score
+
+
+def _looks_like_map_mismatch(
+    *,
+    source_switch: SwitchRecord,
+    candidate_switch: SwitchRecord,
+    description: str,
+    has_id_token: bool,
+) -> bool:
+    if has_id_token:
+        return False
+
+    source_tokens = _switch_identity_tokens(source_switch)
+    candidate_tokens = _switch_identity_tokens(candidate_switch)
+    if not source_tokens or not candidate_tokens:
+        return False
+    if source_tokens.intersection(candidate_tokens):
+        return False
+
+    description_tokens = set(_description_tokens_for_match(description))
+    if description_tokens and description_tokens.intersection(candidate_tokens):
+        return False
+
+    # No source/candidate map-token overlap and description doesn't reinforce candidate:
+    # likely stale/wrong description match from resolver search fuzziness.
+    return True
+
+
+def _switch_identity_tokens(switch: SwitchRecord) -> set[str]:
+    text = " ".join(
+        part for part in [switch.name, *(switch.aliases or [])] if isinstance(part, str) and part.strip()
+    ).casefold()
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", text):
+        if token in {"snr", "mes", "cisco", "switch", "olt", "gpon", "epon"}:
+            continue
+        if token.startswith("id") and token[2:].isdigit():
+            continue
+        if token.isdigit():
+            continue
+        if len(token) < 4:
+            continue
+        if re.match(r"^(?:c\d{3,5}[a-z0-9]*|s\d{3,5}[a-z0-9]*)$", token):
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _in_same_switch_pool(left_host: str, right_host: str) -> bool:
+    left_pool = _extract_10_7_pool(left_host)
+    right_pool = _extract_10_7_pool(right_host)
+    if left_pool is None or right_pool is None:
+        return True
+    return left_pool == right_pool
+
+
+def _extract_10_7_pool(host: str) -> int | None:
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if not isinstance(parsed, ipaddress.IPv4Address):
+        return None
+    octets = host.split(".")
+    if len(octets) != 4:
+        return None
+    if octets[0] != "10" or octets[1] != "7":
+        return None
+    if not octets[2].isdigit():
+        return None
+    return int(octets[2])
+
+
 def _extract_id_token(text: str) -> str | None:
     match = re.search(r"\bid\d{3,}\b", text.casefold())
     if not match:
@@ -1463,8 +1660,15 @@ def _collect_vlan_snapshot(*, session, driver, vlan_id: int) -> str:
         return session.run_show(f"show vlan id {vlan_id}")
     if driver.vendor_key == "snr":
         return session.run_timing(f"show vlan id {vlan_id}")
+    if driver.vendor_key == "snr_s5xxx":
+        output = session.run_timing(f"show vlan {vlan_id}")
+        if _looks_like_invalid_command(output):
+            output = session.run_timing(f"show vlan id {vlan_id}")
+        return output
     if driver.vendor_key == "eltex_mes":
         return session.run_timing(f"show vlan tag {vlan_id}")
+    if driver.vendor_key == "bdcom":
+        return session.run_timing(f"show vlan id {vlan_id}")
     if driver.vendor_key == "arista":
         return session.run_timing(f"show vlan id {vlan_id}")
     return session.run_timing(f"show vlan id {vlan_id}")
@@ -1484,9 +1688,25 @@ def _snapshot_vlan_exists(*, driver, vlan_id: int, snapshot: str) -> bool:
     if driver.vendor_key == "snr":
         if "invalid" in text and "input" in text:
             return False
+    if driver.vendor_key == "snr_s5xxx":
+        missing_markers = (
+            "not found in current vlan database",
+            "vlan id not found",
+            "invalid input",
+            "incomplete command",
+        )
+        if any(marker in text for marker in missing_markers):
+            return False
+        if re.search(rf"^\s*\S+\s+{vlan_id}\s+\S+", snapshot, flags=re.IGNORECASE | re.MULTILINE):
+            return True
     if driver.vendor_key == "eltex_mes":
         if "invalid" in text and "input" in text:
             return False
+    if driver.vendor_key == "bdcom":
+        if "invalid" in text and "input" in text:
+            return False
+        if re.search(rf"vlan\s+id\s*:\s*{vlan_id}\b", text, flags=re.IGNORECASE):
+            return True
     return bool(re.search(rf"^\s*{vlan_id}\s+", snapshot, flags=re.IGNORECASE | re.MULTILINE))
 
 
@@ -1497,6 +1717,15 @@ def _snapshot_interface_tagged(*, driver, vlan_id: int, interface: str | None, s
         return False
 
     wanted = driver.normalize_interface(interface)
+    if driver.vendor_key == "snr_s5xxx":
+        for match in re.finditer(
+            r"(?P<intf>[A-Za-z]+[0-9]+(?:/[0-9]+)*)\((?P<mode>[TtUu])\)",
+            snapshot,
+        ):
+            if driver.normalize_interface(match.group("intf")) != wanted:
+                continue
+            return match.group("mode").casefold() == "t"
+
     if driver.vendor_key == "snr":
         full = _to_snr_ethernet_name(interface)
         return bool(re.search(rf"{re.escape(full)}\s*\(T\)", snapshot, flags=re.IGNORECASE))
@@ -1515,6 +1744,20 @@ def _snapshot_interface_tagged(*, driver, vlan_id: int, interface: str | None, s
         for token in tokens:
             expanded.extend(_expand_eltex_interface_token(token))
         return any(driver.normalize_interface(token) == wanted for token in expanded)
+
+    if driver.vendor_key == "bdcom":
+        for line in snapshot.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parts = re.split(r"\s+", stripped, maxsplit=1)
+            if len(parts) < 2:
+                continue
+            interface_token = parts[0]
+            if driver.normalize_interface(interface_token) != wanted:
+                continue
+            attributes = parts[1].casefold()
+            return "tagged" in attributes
 
     tokens = re.findall(r"(?:[A-Za-z]+[0-9]+(?:/[0-9]+)*)", snapshot)
     return any(driver.normalize_interface(token) == wanted for token in tokens)
@@ -1553,8 +1796,12 @@ def _build_vlan_create_action(
         return f"conf t ; vlan {vlan_id} ; exit"
     if vendor_key == "snr":
         return f"config terminal ; vlan {vlan_id} ; exit"
+    if vendor_key == "snr_s5xxx":
+        return f"conf ; vlan {vlan_id} ; exit"
     if vendor_key == "eltex_mes":
         return f"configure terminal ; vlan database ; vlan {vlan_id} ; exit ; exit"
+    if vendor_key == "bdcom":
+        return f"conf ; vlan {vlan_id} ; exit"
     return f"create VLAN {vlan_id} (vendor-specific command required)"
 
 
@@ -1574,10 +1821,20 @@ def _build_vlan_tag_action(*, vendor_key: str, interface: str, vlan_id: int) -> 
             f"config terminal ; interface {_to_snr_config_interface(interface)} ; "
             f"switchport trunk allowed vlan add {vlan_id} ; exit"
         )
+    if vendor_key == "snr_s5xxx":
+        return (
+            f"conf ; interface {interface} ; "
+            f"switchport trunk allowed vlan add {vlan_id} ; exit"
+        )
     if vendor_key == "eltex_mes":
         return (
             f"configure terminal ; interface {interface} ; "
             f"switchport trunk allowed vlan add {vlan_id} ; exit"
+        )
+    if vendor_key == "bdcom":
+        return (
+            f"conf ; interface {interface} ; "
+            f"switchport trunk vlan-allowed add {vlan_id} ; exit"
         )
     return f"allow VLAN {vlan_id} on {interface} (vendor-specific command required)"
 
@@ -1752,6 +2009,26 @@ def _discover_switch_self_mac(*, session, driver, switch: SwitchRecord) -> str |
             require_any_keywords=("cpu", "system"),
         )
 
+    if driver.vendor_key == "snr_s5xxx":
+        version_output = session.run_timing("show version")
+        discovered_from_version = extract_snr_s5_vlan_mac_from_version(version_output)
+        if discovered_from_version:
+            return discovered_from_version
+
+        output = session.run_timing("show mac address-table | i CPU")
+        if not output.strip() or _looks_like_invalid_command(output):
+            output = session.run_timing("show mac address-table")
+        discovered = _extract_preferred_switch_mac(
+            output,
+            require_any_keywords=("cpu", "system", "static"),
+        )
+        if discovered:
+            return discovered
+        return _extract_preferred_switch_mac(
+            output,
+            require_any_keywords=(),
+        )
+
     if driver.vendor_key == "eltex_mes":
         output = session.run_timing("show mac address-table | i self")
         if not output.strip() or _looks_like_invalid_command(output):
@@ -1759,6 +2036,20 @@ def _discover_switch_self_mac(*, session, driver, switch: SwitchRecord) -> str |
         return _extract_preferred_switch_mac(
             output,
             require_any_keywords=("self",),
+        )
+
+    if driver.vendor_key == "bdcom":
+        version_output = session.run_timing("show version")
+        discovered_from_version = extract_bdcom_base_mac_from_version(version_output)
+        if discovered_from_version:
+            return discovered_from_version
+
+        output = session.run_timing("show mac address-table static")
+        if not output.strip() or _looks_like_invalid_command(output):
+            output = session.run_timing("show mac address-table")
+        return _extract_preferred_switch_mac(
+            output,
+            require_any_keywords=("cpu", "static"),
         )
 
     return None
@@ -1783,6 +2074,11 @@ def _extract_preferred_switch_mac(
         )
         if not mac_match:
             continue
+        compact_mac = re.sub(r"[^0-9A-Fa-f]", "", mac_match.group(1)).casefold()
+        if len(compact_mac) != 12:
+            continue
+        if _looks_like_control_plane_mac(compact_mac):
+            continue
 
         score = 0
         if "111" in lower:
@@ -1797,6 +2093,19 @@ def _extract_preferred_switch_mac(
     if not candidates:
         return None
     return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
+
+
+def _looks_like_control_plane_mac(compact_mac: str) -> bool:
+    if compact_mac in {"000000000000", "ffffffffffff"}:
+        return True
+    if compact_mac.startswith("00000000"):
+        return True
+    control_prefixes = (
+        "01000ccc",
+        "0180c2",
+        "3333",
+    )
+    return any(compact_mac.startswith(prefix) for prefix in control_prefixes)
 
 
 def _select_preferred_mac_entry(entries: list[MacTableEntry]) -> MacTableEntry:
