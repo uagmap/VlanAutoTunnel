@@ -17,6 +17,7 @@ Supported vendor drivers in current code:
 - `snr`
 - `eltex_mes`
 - `arista`
+- `bdcom` (kinda)
 - `generic_telnet` (fallback for basic session/probe use)
 
 ## Requirements
@@ -109,69 +110,41 @@ Notes:
 - `l3_mapping.overrides` is evaluated before the default L3 derivation rule.
 - If multiple override subnets match, the most specific CIDR (largest prefix length) wins.
 
-## CLI Usage
+## Usage
 
-Base help:
+```text
+main.py [-h] [--confirm-steps] [--debug]
+        {resolve,probe,trace-mac,find-vlan,plan,deploy} ...
 
-```powershell
-python main.py --help
+main.py probe SWITCH [--l3 L3_SWITCH_NAME_OR_IP] [--debug]
+main.py find-vlan L3_SWITCH_NAME_OR_IP [--debug]
+main.py plan DEST_SWITCH [DEST_PORT] [--l3 L3_SWITCH] [--vlan VLAN_ID] [--confirm-steps] [--debug]
+main.py deploy DEST_SWITCH [DEST_PORT] [--l3 L3_SWITCH] [--vlan VLAN_ID] [--confirm-steps] [--debug]
 ```
 
-### Resolve a switch
+Commands:
 
-```powershell
-python main.py resolve SWITCH_NAME_OR_IP
-```
+- `resolve`: Resolve a switch name/alias/IP to the final host record the tool will use.
+- `probe`: Open a live session to a switch, run probe commands, and verify prompt/session behavior.
+- `trace-mac`: Search a switch MAC table for a specific MAC and show where it is learned.
+- `find-vlan`: Find the first free VLAN on the selected L3 switch using vendor-specific logic.
+- `plan`: Build a dry-run hop-by-hop VLAN path plan (what would be changed, without applying).
+- `deploy`: Execute the hop-by-hop VLAN path changes live on the traced switches.
 
-### Probe a switch session
+| flag | what it does |
+| --- | --- |
+| `-h`, `--help` | Show CLI help. |
+| `--confirm-steps` | Interactive safety mode: ask before each switch connection and command. Global flag; `plan`/`deploy` also accept it after subcommand. |
+| `--debug` | Print live debug output for connections and command execution. Global flag; `probe`/`find-vlan`/`plan`/`deploy` also accept command-local `--debug`. |
+| `--l3 L3_SWITCH` | Manually override L3 switch selection. |
+| `--vlan VLAN_ID` | Use a fixed VLAN instead of automatic free-VLAN selection in `deploy` and `plan`. |
 
-```powershell
-python main.py probe SWITCH_NAME_OR_IP --debug
-```
+Notes:
 
-Optional manual L3 override during probe:
-
-```powershell
-python main.py probe SWITCH_NAME_OR_IP --l3 L3_SWITCH_NAME_OR_IP
-```
-
-### MAC lookup
-
-```powershell
-python main.py trace-mac SWITCH_NAME_OR_IP aa-bb-cc-dd-ee-ff
-```
-
-### Find free VLAN on an L3 switch
-
-```powershell
-python main.py find-vlan L3_SWITCH_NAME_OR_IP --debug
-```
-
-### Dry-run path planning
-
-Auto-select VLAN:
-
-```powershell
-python main.py plan DEST_SWITCH DEST_PORT --debug
-```
-
-Fixed VLAN:
-
-```powershell
-python main.py plan DEST_SWITCH DEST_PORT --vlan 1200 --l3 L3_SWITCH
-```
-
-### Live deploy
-
-```powershell
-python main.py deploy DEST_SWITCH DEST_PORT --debug
-```
-
-Safe interactive mode (confirmation before connect/commands):
-
-```powershell
-python main.py deploy DEST_SWITCH DEST_PORT --confirm-steps
-```
+- `resolve` and `trace-mac` have no command-specific flags (besides global flags).
+- `DEST_PORT` is optional for `plan`/`deploy`; if omitted, destination switch self-MAC is used.
+- In `plan`/`deploy`, if `--vlan` is omitted the tool auto-selects a free VLAN from configured ranges.
+- For BDCOM OLT safety, deploy/trace aborts when downlink resolves to ONU terminal-style interfaces (`eponX/Y:Z` or `gponX/Y:Z`).
 
 ## Logs
 
@@ -189,21 +162,6 @@ python zabbix_name_ip_resolver.py hostname-to-ip SWITCH_QUERY
 python zabbix_name_ip_resolver.py ip-to-hostname 10.1.1.10
 python zabbix_name_ip_resolver.py search PARTIAL_NAME
 ```
-
-There is also `generate_l3_overrides.py` to suggest irregular `l3_mapping.overrides` entries:
-
-```powershell
-python generate_l3_overrides.py --config config.yaml --output l3_mapping_overrides.txt --debug
-```
-
-By default it skips `10.1.1.17` and `10.1.1.254`.
-You can add more exclusions:
-
-```powershell
-python generate_l3_overrides.py --exclude-l3 10.1.1.200 --exclude-l3 10.1.1.201
-```
-
-The helper only considers `10.7.x.y` addresses on `Vlan111` that have `/24` mask (`255.255.255.0`) when generating overrides. This avoids false mappings from transit/service subnets like `/30` or `/26`.
 
 ## Troubleshooting
 
