@@ -55,3 +55,5 @@ vendors:
     notes: SNR parsing is implemented from provided samples.
   eltex_mes:
     notes: Eltex MES parsing is implemented from provided samples.
+  bdcom:
+    notes: BDCOM OLT/switch support is implemented for VLAN create + MAC tracing basics.

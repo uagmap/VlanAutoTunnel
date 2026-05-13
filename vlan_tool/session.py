@@ -18,9 +18,11 @@ except ImportError:  # pragma: no cover - optional until dependencies are instal
 DEFAULT_DEVICE_TYPES = {
     "arista": "arista_eos_telnet",
     "arista_eos": "arista_eos_telnet",
+    "bdcom": "generic_telnet",
     "cisco_ios": "cisco_ios_telnet",
     "generic_telnet": "generic_telnet",
     "snr": "generic_telnet",
+    "snr_s5xxx": "generic_telnet",
     "eltex_mes": "generic_telnet",
 }
 
