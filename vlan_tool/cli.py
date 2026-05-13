@@ -909,7 +909,7 @@ def _execute_actions_in_current_session(*, session, switch: SwitchRecord, action
     if not actions:
         return 0
 
-    commands, used_config = _flatten_actions_for_single_config_session(actions)
+    commands, used_config = _flatten_actions_for_single_config_session(actions, switch.vendor)
     executed = 0
     if used_config:
         if not commands:
@@ -1015,7 +1015,7 @@ def _looks_like_config_prompt(text: str) -> bool:
     )
 
 
-def _flatten_actions_for_single_config_session(actions: list[str]) -> tuple[list[str], bool]:
+def _flatten_actions_for_single_config_session(actions: list[str], vendor_key: str) -> tuple[list[str], bool]:
     payloads: list[str] = []
     enter_config: str | None = None
     for action in actions:
@@ -1030,11 +1030,17 @@ def _flatten_actions_for_single_config_session(actions: list[str]) -> tuple[list
     if enter_config is None:
         return payloads, False
 
-    # Final "exit" right before final "end" is redundant and creates noise.
-    while payloads and payloads[-1].strip().casefold() == "exit":
-        payloads.pop()
+    # For most vendors, trailing "exit" before final "end" is redundant and noisy.
+    if vendor_key != "bdcom":
+        while payloads and payloads[-1].strip().casefold() == "exit":
+            payloads.pop()
 
-    result = [enter_config, *payloads, "end"]
+    result = [enter_config, *payloads]
+    if vendor_key == "bdcom":
+        # BDCOM does not support "end"; leave config hierarchy with "exit".
+        result.append("exit")
+    else:
+        result.append("end")
     return result, True
 
 
