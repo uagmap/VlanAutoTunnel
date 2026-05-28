@@ -627,14 +627,36 @@ def _execute_live_path_plan(
                 if current_driver.capabilities.interface_inventory
                 else {}
             )
+            is_destination = current_switch.host == destination_switch.host
+            role = "destination" if is_destination else "intermediate"
+
+            if current_driver.vendor_key == "ltp" and not is_destination:
+                hop_report, ltp_command_count = _process_ltp_intermediate_hop(
+                    session=session,
+                    resolver=resolver,
+                    switch=current_switch,
+                    driver=current_driver,
+                    chosen_vlan=chosen_vlan,
+                    target_mac=request.target_mac or "",
+                    l3_trace_mac=l3_trace_mac,
+                    apply_changes=apply_changes,
+                    debug=debug,
+                )
+                executed_commands += ltp_command_count
+                hop_reports.append(hop_report)
+                if not hop_report.neighbor_switch:
+                    raise RuntimeError(
+                        f"Stopping on LTP {current_switch.name} ({current_switch.host}): "
+                        "unable to determine next hop automatically. Continue manually."
+                    )
+                current_switch = hop_report.neighbor_switch
+                continue
+
             snapshot = ""
             vlan_exists = False
             if not apply_changes:
                 snapshot = _collect_vlan_snapshot(session=session, driver=current_driver, vlan_id=chosen_vlan)
                 vlan_exists = _snapshot_vlan_exists(driver=current_driver, vlan_id=chosen_vlan, snapshot=snapshot)
-
-            is_destination = current_switch.host == destination_switch.host
-            role = "destination" if is_destination else "intermediate"
 
             downlink_interface = None
             downlink_description = None
@@ -984,6 +1006,7 @@ def _build_config_entry_attempts(vendor_key: str, preferred: str) -> list[str]:
         "snr": ["config terminal", "configure terminal"],
         "snr_s5xxx": ["conf", "config", "configure terminal", "conf t", "config terminal"],
         "eltex_mes": ["configure terminal", "config terminal", "conf t"],
+        "ltp": ["configure terminal", "config terminal", "conf t", "conf"],
         "bdcom": ["conf", "configure terminal", "config terminal", "conf t"],
     }.get(vendor_key, ["configure terminal", "conf t", "config terminal"])
     for candidate in candidates:
@@ -1339,6 +1362,257 @@ def _is_sensitive_olt_terminal_interface(interface: str | None) -> bool:
     return bool(re.match(r"^(?:epon|gpon)\d+/\d+:\d+$", normalized))
 
 
+def _process_ltp_intermediate_hop(
+    *,
+    session,
+    resolver: SwitchResolver,
+    switch: SwitchRecord,
+    driver,
+    chosen_vlan: int,
+    target_mac: str,
+    l3_trace_mac: str,
+    apply_changes: bool,
+    debug: bool,
+) -> tuple[_HopReport, int]:
+    downlink_entries = driver.lookup_mac(session, target_mac)
+    downlink_entry = _pick_downlink_entry(downlink_entries)
+    if not downlink_entry:
+        raise RuntimeError(
+            f"Stopping on LTP {switch.name} ({switch.host}): "
+            f"destination MAC {target_mac} was not found. Continue manually."
+        )
+
+    downlink_interface = downlink_entry.interface
+    normalized_downlink = driver.normalize_interface(downlink_interface)
+    if _is_ltp_sensitive_downlink_interface(normalized_downlink):
+        raise RuntimeError(
+            f"Stopping on LTP {switch.name} ({switch.host}): downlink {downlink_interface} "
+            "is PON/ONT-facing and requires manual continuation."
+        )
+    if not _is_ltp_front_uplink_interface(normalized_downlink):
+        raise RuntimeError(
+            f"Stopping on LTP {switch.name} ({switch.host}): unsupported downlink interface "
+            f"{downlink_interface}. Continue manually."
+        )
+
+    running_config = session.run_timing("show running-config")
+    vlan_block = _extract_ltp_vlan_block(running_config=running_config, vlan_id=chosen_vlan)
+    vlan_exists = vlan_block is not None
+    tagged_interfaces = _extract_ltp_tagged_interfaces_from_vlan_block(
+        vlan_block=vlan_block or [],
+        driver=driver,
+    )
+    expected_interfaces = _expected_ltp_blanket_interfaces(switch=switch, driver=driver)
+    blanket_tagged = expected_interfaces.issubset(tagged_interfaces)
+    downlink_tagged = normalized_downlink in tagged_interfaces
+
+    actions: list[str] = []
+    applied_actions: list[str] = []
+    executed_commands = 0
+    blanket_action = _build_ltp_blanket_action(vlan_id=chosen_vlan, switch=switch)
+    if not blanket_tagged:
+        actions.append(blanket_action)
+
+    if apply_changes and actions:
+        _debug_note(
+            debug,
+            f"Applying LTP blanket VLAN policy on {switch.name} for VLAN {chosen_vlan}.",
+        )
+        executed_commands += _apply_ltp_blanket_vlan_policy(
+            session=session,
+            switch=switch,
+            vlan_id=chosen_vlan,
+            driver=driver,
+        )
+        applied_actions.extend(actions)
+        running_config = session.run_timing("show running-config")
+        vlan_block = _extract_ltp_vlan_block(running_config=running_config, vlan_id=chosen_vlan)
+        vlan_exists = vlan_block is not None
+        tagged_interfaces = _extract_ltp_tagged_interfaces_from_vlan_block(
+            vlan_block=vlan_block or [],
+            driver=driver,
+        )
+        downlink_tagged = normalized_downlink in tagged_interfaces
+
+    downlink_description = _extract_ltp_interface_description(
+        running_config=running_config,
+        interface=downlink_interface,
+        driver=driver,
+    )
+    if not downlink_description:
+        raise RuntimeError(
+            f"Stopping on LTP {switch.name} ({switch.host}): no description found for {downlink_interface} "
+            "in show running-config. Continue manually."
+        )
+
+    neighbor_switch = _resolve_neighbor_from_description(
+        resolver,
+        downlink_description,
+        source_switch=switch,
+        debug=debug,
+    )
+    if not neighbor_switch:
+        raise RuntimeError(
+            f"Stopping on LTP {switch.name} ({switch.host}): description '{downlink_description}' "
+            "did not resolve a confident next hop. Continue manually."
+        )
+
+    uplink_entries = driver.lookup_mac(session, l3_trace_mac)
+    uplink_entry = _pick_uplink_entry(uplink_entries)
+    uplink_interface = uplink_entry.interface if uplink_entry else None
+    notes: list[str] = []
+    if not uplink_interface:
+        notes.append(f"Unable to find uplink interface by L3 MAC {l3_trace_mac}.")
+
+    return (
+        _HopReport(
+            switch=switch,
+            role="intermediate",
+            uplink_interface=uplink_interface,
+            downlink_interface=downlink_interface,
+            neighbor_description=downlink_description,
+            neighbor_switch=neighbor_switch,
+            vlan_exists=vlan_exists,
+            uplink_tagged=None,
+            downlink_tagged=downlink_tagged,
+            session_log=str(session.session_log),
+            notes=notes,
+            actions=actions,
+            applied_actions=applied_actions,
+        ),
+        executed_commands,
+    )
+
+
+def _is_ltp_sensitive_downlink_interface(normalized_interface: str) -> bool:
+    if normalized_interface.startswith("pon-port "):
+        return True
+    return ":" in normalized_interface
+
+
+def _is_ltp_front_uplink_interface(normalized_interface: str) -> bool:
+    return normalized_interface.startswith("front-port ") or normalized_interface.startswith("10g-front-port ")
+
+
+def _ltp_front_pon_max_port(switch: SwitchRecord) -> int:
+    names = [switch.name, *(switch.aliases or [])]
+    for name in names:
+        match = re.search(r"\bltp-(?P<count>\d+)x\b", str(name or "").casefold())
+        if not match:
+            continue
+        count = int(match.group("count"))
+        if count <= 0:
+            continue
+        return count - 1
+    # Conservative default for unknown LTP profile.
+    return 7
+
+
+def _build_ltp_blanket_action(*, vlan_id: int, switch: SwitchRecord) -> str:
+    max_port = _ltp_front_pon_max_port(switch)
+    return (
+        f"configure terminal ; vlan {vlan_id} ; "
+        f"tagged pon-port 0 - {max_port} ; "
+        f"tagged front-port 0 - {max_port} ; "
+        "tagged 10G-front-port 0 - 1 ; "
+        "exit ; commit ; exit"
+    )
+
+
+def _apply_ltp_blanket_vlan_policy(*, session, switch: SwitchRecord, vlan_id: int, driver) -> int:
+    max_port = _ltp_front_pon_max_port(switch)
+    commands = [
+        "configure terminal",
+        f"vlan {vlan_id}",
+        f"tagged pon-port 0 - {max_port}",
+        f"tagged front-port 0 - {max_port}",
+        "tagged 10G-front-port 0 - 1",
+        "exit",
+        "commit",
+        "exit",
+    ]
+    executed = 0
+    for command in commands:
+        output = session.run_timing(command)
+        if _looks_like_command_failure(output) and not _is_benign_command_failure(
+            command=command,
+            output=output,
+            vendor_key=driver.vendor_key,
+        ):
+            raise RuntimeError(
+                "Deployment failed on "
+                f"{switch.name} ({switch.host}) while running '{command}'. "
+                "Review session log for details."
+            )
+        executed += 1
+    return executed
+
+
+def _extract_ltp_vlan_block(*, running_config: str, vlan_id: int) -> list[str] | None:
+    lines = running_config.splitlines()
+    start_index: int | None = None
+    for index, line in enumerate(lines):
+        if re.match(rf"^\s*vlan\s+{vlan_id}\b", line, flags=re.IGNORECASE):
+            start_index = index
+            break
+    if start_index is None:
+        return None
+
+    block: list[str] = []
+    for line in lines[start_index + 1 :]:
+        if re.match(r"^\s*exit\s*$", line, flags=re.IGNORECASE):
+            break
+        block.append(line)
+    return block
+
+
+def _extract_ltp_tagged_interfaces_from_vlan_block(*, vlan_block: list[str], driver) -> set[str]:
+    tagged: set[str] = set()
+    for line in vlan_block:
+        match = re.match(r"^\s*tagged\s+(?P<ports>.+)$", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        for part in match.group("ports").split(","):
+            normalized = driver.normalize_interface(part)
+            if normalized:
+                tagged.add(normalized)
+    return tagged
+
+
+def _expected_ltp_blanket_interfaces(*, switch: SwitchRecord, driver) -> set[str]:
+    max_port = _ltp_front_pon_max_port(switch)
+    expected: set[str] = set()
+    for index in range(0, max_port + 1):
+        expected.add(driver.normalize_interface(f"pon-port {index}"))
+        expected.add(driver.normalize_interface(f"front-port {index}"))
+    expected.add(driver.normalize_interface("10G-front-port 0"))
+    expected.add(driver.normalize_interface("10G-front-port 1"))
+    return expected
+
+
+def _extract_ltp_interface_description(*, running_config: str, interface: str, driver) -> str | None:
+    wanted = driver.normalize_interface(interface)
+    current_interface: str | None = None
+    for raw_line in running_config.splitlines():
+        iface_match = re.match(r"^\s*interface\s+(?P<interface>.+)$", raw_line, flags=re.IGNORECASE)
+        if iface_match:
+            current_interface = driver.normalize_interface(iface_match.group("interface").strip())
+            continue
+        if current_interface != wanted:
+            continue
+        description_match = re.match(
+            r"^\s*description\s+(?P<description>.+?)\s*$",
+            raw_line,
+            flags=re.IGNORECASE,
+        )
+        if not description_match:
+            continue
+        description = description_match.group("description").strip().strip("\"'`")
+        if description:
+            return description
+    return None
+
+
 def _lookup_interface_description(
     *,
     statuses: dict[str, object],
@@ -1391,8 +1665,6 @@ def _build_interface_description_commands(vendor_key: str, interface: str) -> li
         return [
             f"show running-config interface {compact}",
             f"show run interface {compact}",
-            f"show run int {compact}",
-            f"show run int {raw}",
         ]
     if vendor_key == "eltex_mes":
         return [f"show run int {raw.lower().replace(' ', '')}"]
@@ -1409,7 +1681,7 @@ def _build_interface_description_commands(vendor_key: str, interface: str) -> li
 
 
 def _run_vendor_show_command(*, session, vendor_key: str, command: str) -> str:
-    if vendor_key in {"snr", "snr_s5xxx", "eltex_mes", "arista", "bdcom"}:
+    if vendor_key in {"snr", "snr_s5xxx", "eltex_mes", "arista", "bdcom", "ltp"}:
         return session.run_timing(command)
     return session.run_show(command)
 
@@ -1667,14 +1939,13 @@ def _collect_vlan_snapshot(*, session, driver, vlan_id: int) -> str:
     if driver.vendor_key == "snr":
         return session.run_timing(f"show vlan id {vlan_id}")
     if driver.vendor_key == "snr_s5xxx":
-        output = session.run_timing(f"show vlan {vlan_id}")
-        if _looks_like_invalid_command(output):
-            output = session.run_timing(f"show vlan id {vlan_id}")
-        return output
+        return session.run_timing(f"show vlan {vlan_id}")
     if driver.vendor_key == "eltex_mes":
         return session.run_timing(f"show vlan tag {vlan_id}")
     if driver.vendor_key == "bdcom":
         return session.run_timing(f"show vlan id {vlan_id}")
+    if driver.vendor_key == "ltp":
+        return session.run_timing("show running-config")
     if driver.vendor_key == "arista":
         return session.run_timing(f"show vlan id {vlan_id}")
     return session.run_timing(f"show vlan id {vlan_id}")
@@ -1713,6 +1984,8 @@ def _snapshot_vlan_exists(*, driver, vlan_id: int, snapshot: str) -> bool:
             return False
         if re.search(rf"vlan\s+id\s*:\s*{vlan_id}\b", text, flags=re.IGNORECASE):
             return True
+    if driver.vendor_key == "ltp":
+        return _extract_ltp_vlan_block(running_config=snapshot, vlan_id=vlan_id) is not None
     return bool(re.search(rf"^\s*{vlan_id}\s+", snapshot, flags=re.IGNORECASE | re.MULTILINE))
 
 
@@ -1764,6 +2037,12 @@ def _snapshot_interface_tagged(*, driver, vlan_id: int, interface: str | None, s
                 continue
             attributes = parts[1].casefold()
             return "tagged" in attributes
+    if driver.vendor_key == "ltp":
+        vlan_block = _extract_ltp_vlan_block(running_config=snapshot, vlan_id=vlan_id)
+        if vlan_block is None:
+            return False
+        tagged = _extract_ltp_tagged_interfaces_from_vlan_block(vlan_block=vlan_block, driver=driver)
+        return wanted in tagged
 
     tokens = re.findall(r"(?:[A-Za-z]+[0-9]+(?:/[0-9]+)*)", snapshot)
     return any(driver.normalize_interface(token) == wanted for token in tokens)
@@ -1806,6 +2085,8 @@ def _build_vlan_create_action(
         return f"conf ; vlan {vlan_id} ; exit"
     if vendor_key == "eltex_mes":
         return f"configure terminal ; vlan database ; vlan {vlan_id} ; exit ; exit"
+    if vendor_key == "ltp":
+        return f"configure terminal ; vlan {vlan_id} ; exit ; commit ; exit"
     if vendor_key == "bdcom":
         return f"conf ; vlan {vlan_id} ; exit"
     return f"create VLAN {vlan_id} (vendor-specific command required)"
@@ -1836,6 +2117,11 @@ def _build_vlan_tag_action(*, vendor_key: str, interface: str, vlan_id: int) -> 
         return (
             f"configure terminal ; interface {interface} ; "
             f"switchport trunk allowed vlan add {vlan_id} ; exit"
+        )
+    if vendor_key == "ltp":
+        return (
+            f"configure terminal ; vlan {vlan_id} ; "
+            f"tagged {interface} ; exit ; commit ; exit"
         )
     if vendor_key == "bdcom":
         return (

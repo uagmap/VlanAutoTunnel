@@ -24,6 +24,7 @@ DEFAULT_DEVICE_TYPES = {
     "snr": "generic_telnet",
     "snr_s5xxx": "generic_telnet",
     "eltex_mes": "generic_telnet",
+    "ltp": "generic_telnet",
 }
 
 TRANSIENT_TELNET_ERRORS = (ConnectionResetError, TimeoutError, OSError, EOFError)

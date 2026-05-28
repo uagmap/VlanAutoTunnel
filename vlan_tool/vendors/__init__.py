@@ -5,6 +5,7 @@ from vlan_tool.vendors.base import VendorDriver
 from vlan_tool.vendors.bdcom import BDCOMDriver
 from vlan_tool.vendors.cisco_ios import CiscoIOSDriver
 from vlan_tool.vendors.eltex_mes import EltexMESDriver
+from vlan_tool.vendors.ltp import LTPDriver
 from vlan_tool.vendors.snr import SNRDriver
 from vlan_tool.vendors.snr_s5xxx import SNRS5xxxDriver
 
@@ -22,6 +23,7 @@ _DRIVERS = {
     "bdcom": BDCOMDriver(),
     "cisco_ios": CiscoIOSDriver(),
     "eltex_mes": EltexMESDriver(),
+    "ltp": LTPDriver(),
     "snr": SNRDriver(),
     "snr_s5xxx": SNRS5xxxDriver(),
     "generic_telnet": GenericTelnetDriver(),

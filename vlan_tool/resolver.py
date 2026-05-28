@@ -253,6 +253,8 @@ def _normalize_inventory_switch_vendor(switch: SwitchRecord) -> SwitchRecord:
     model = str(switch.name or "").strip().casefold().split(".", 1)[0]
     if switch.vendor == "snr" and re.match(r"^(?:snr-)?s5\d", model):
         return replace(switch, vendor="snr_s5xxx")
+    if switch.vendor in {"generic_telnet", "eltex_mes"} and model.startswith("ltp-"):
+        return replace(switch, vendor="ltp")
     return switch
 
 
@@ -317,6 +319,8 @@ def _is_ip_address(value: str) -> bool:
 def _infer_vendor_from_name(hostname: str) -> str:
     token = hostname.strip().casefold()
     model = token.split(".", 1)[0]
+    if model.startswith("ltp-"):
+        return "ltp"
     if "bdcom" in model:
         return "bdcom"
     if re.match(r"^(?:snr-)?s5\d", model):
