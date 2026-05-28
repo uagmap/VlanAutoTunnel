@@ -26,6 +26,8 @@ CLI_ERROR_RE = re.compile(
     r"(?:invalid input|unknown command|unrecognized command|incomplete command|error:)",
     re.IGNORECASE,
 )
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+MORE_PROMPT_RE = re.compile(r"--\s*more\s*--", re.IGNORECASE)
 
 
 class SNRS5xxxDriver(VendorDriver):
@@ -33,7 +35,7 @@ class SNRS5xxxDriver(VendorDriver):
     capabilities = DriverCapabilities(
         mac_lookup=True,
         mac_lookup_by_interface=True,
-        interface_inventory=True,
+        interface_inventory=False,
         provisioning=False,
     )
 
@@ -50,17 +52,17 @@ class SNRS5xxxDriver(VendorDriver):
                 sensitive=True,
             )
 
-        session.run_timing("terminal length 0")
-        session.run_timing("terminal width 511")
-        session.run_timing("no page")
+        # eNOS/S5: terminal width may re-enable paging behavior on some versions.
+        _run_snr_s5_command(session, "terminal length 0")
 
     def lookup_mac(self, session: SwitchSession, mac_address: str) -> list[MacTableEntry]:
         wanted = normalize_snr_s5_mac(mac_address)
-        output = session.run_timing(
+        output = _run_snr_s5_command(
+            session,
             f"show mac address-table address {format_snr_s5_cli_mac(wanted)}"
         )
         if CLI_ERROR_RE.search(output) or not output.strip():
-            output = session.run_timing("show mac address-table")
+            output = _run_snr_s5_command(session, "show mac address-table")
         return _parse_snr_s5_mac_lines(output, wanted_mac=wanted)
 
     def lookup_interface_macs(self, session: SwitchSession, interface: str) -> list[MacTableEntry]:
@@ -71,7 +73,7 @@ class SNRS5xxxDriver(VendorDriver):
             f"show mac address-table dynamic interface {lookup_interface}",
             "show mac address-table",
         ):
-            output = session.run_timing(command)
+            output = _run_snr_s5_command(session, command)
             outputs.append(output)
             if command == "show mac address-table":
                 break
@@ -86,9 +88,9 @@ class SNRS5xxxDriver(VendorDriver):
         return []
 
     def get_interface_statuses(self, session: SwitchSession) -> dict[str, InterfaceStatus]:
-        output = session.run_timing("show int brief")
+        output = _run_snr_s5_command(session, "show int brief")
         if CLI_ERROR_RE.search(output):
-            output = session.run_timing("show interface brief")
+            output = _run_snr_s5_command(session, "show interface brief")
 
         results: dict[str, InterfaceStatus] = {}
         last_interface_key: str | None = None
@@ -212,3 +214,42 @@ def _parse_snr_s5_mac_lines(
             )
         )
     return entries
+
+
+def _run_snr_s5_command(session: SwitchSession, command: str) -> str:
+    output = session.run_timing(command)
+    output = _collect_paginated_output(session, output)
+    return _strip_terminal_artifacts(output)
+
+
+def _collect_paginated_output(session: SwitchSession, first_chunk: str) -> str:
+    output = first_chunk or ""
+    chunk = first_chunk or ""
+    page_reads = 0
+    while _contains_more_prompt(chunk):
+        # Advance pager by one screen and keep collecting until prompt returns.
+        chunk = session.run_timing(" ", confirm_label="advance pager")
+        output += chunk
+        page_reads += 1
+        if page_reads > 300:
+            raise RuntimeError("Pager did not terminate while collecting command output on SNR-S5.")
+    return output
+
+
+def _contains_more_prompt(text: str) -> bool:
+    if not text:
+        return False
+    cleaned = _strip_ansi_only(text).casefold()
+    return bool(MORE_PROMPT_RE.search(cleaned))
+
+
+def _strip_terminal_artifacts(text: str) -> str:
+    cleaned = _strip_ansi_only(text).replace("\x07", "")
+    cleaned = re.sub(r"--\s*More\s*--", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def _strip_ansi_only(text: str) -> str:
+    if not text:
+        return ""
+    return ANSI_ESCAPE_RE.sub("", text)
