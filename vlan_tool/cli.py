@@ -446,11 +446,6 @@ def _execute_live_path_plan(
         l3_source = f"auto ({auto_l3_reason})"
     _debug_note(debug, f"Using L3 switch {l3_switch.name} ({l3_switch.host}) [{l3_source}]")
 
-    if apply_changes and not confirm_steps:
-        if not _confirm_yes_no_local(
-            "[confirm] Deploy mode without --confirm-steps will execute commands immediately. Continue? [y/N]: "
-        ):
-            raise RuntimeError("Operation cancelled by user before deployment run.")
 
     l3_driver = get_driver(l3_switch.vendor)
     hop_reports: list[_HopReport] = []
@@ -1201,10 +1196,6 @@ def _looks_like_write_confirmation_prompt(output: str) -> bool:
     )
 
 
-def _confirm_yes_no_local(prompt: str) -> bool:
-    answer = input(prompt).strip().casefold()
-    return answer in {"y", "yes"}
-
 
 def _debug_note(enabled: bool, message: str) -> None:
     if enabled:
@@ -1398,10 +1389,7 @@ def _process_ltp_intermediate_hop(
     running_config = session.run_timing("show running-config")
     vlan_block = _extract_ltp_vlan_block(running_config=running_config, vlan_id=chosen_vlan)
     vlan_exists = vlan_block is not None
-    tagged_interfaces = _extract_ltp_tagged_interfaces_from_vlan_block(
-        vlan_block=vlan_block or [],
-        driver=driver,
-    )
+    tagged_interfaces = _extract_ltp_tagged_interfaces_from_vlan_block(vlan_block or [], driver=driver)
     expected_interfaces = _expected_ltp_blanket_interfaces(switch=switch, driver=driver)
     blanket_tagged = expected_interfaces.issubset(tagged_interfaces)
     downlink_tagged = normalized_downlink in tagged_interfaces
@@ -1428,10 +1416,7 @@ def _process_ltp_intermediate_hop(
         running_config = session.run_timing("show running-config")
         vlan_block = _extract_ltp_vlan_block(running_config=running_config, vlan_id=chosen_vlan)
         vlan_exists = vlan_block is not None
-        tagged_interfaces = _extract_ltp_tagged_interfaces_from_vlan_block(
-            vlan_block=vlan_block or [],
-            driver=driver,
-        )
+        tagged_interfaces = _extract_ltp_tagged_interfaces_from_vlan_block(vlan_block or [], driver=driver)
         downlink_tagged = normalized_downlink in tagged_interfaces
 
     downlink_description = _extract_ltp_interface_description(
@@ -1665,6 +1650,8 @@ def _build_interface_description_commands(vendor_key: str, interface: str) -> li
         return [
             f"show running-config interface {compact}",
             f"show run interface {compact}",
+            f"show run int {compact}",
+            f"show run int {raw}",
         ]
     if vendor_key == "eltex_mes":
         return [f"show run int {raw.lower().replace(' ', '')}"]
@@ -1939,7 +1926,10 @@ def _collect_vlan_snapshot(*, session, driver, vlan_id: int) -> str:
     if driver.vendor_key == "snr":
         return session.run_timing(f"show vlan id {vlan_id}")
     if driver.vendor_key == "snr_s5xxx":
-        return session.run_timing(f"show vlan {vlan_id}")
+        output = session.run_timing(f"show vlan {vlan_id}")
+        if _looks_like_invalid_command(output):
+            output = session.run_timing(f"show vlan id {vlan_id}")
+        return output
     if driver.vendor_key == "eltex_mes":
         return session.run_timing(f"show vlan tag {vlan_id}")
     if driver.vendor_key == "bdcom":
