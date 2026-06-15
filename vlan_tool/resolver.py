@@ -490,7 +490,7 @@ def _score_host_match(host: dict, query_norm: str) -> int:
 
 
 def _extract_id_token(text: str) -> str | None:
-    match = re.search(r"\bid\d{3,}\b", text.casefold())
+    match = re.search(r"(?<![a-z0-9])id\d{3,}(?![a-z0-9])", text.casefold())
     if not match:
         return None
     return match.group(0)

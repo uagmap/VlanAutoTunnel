@@ -142,7 +142,7 @@ Commands:
 Notes:
 
 - `resolve` and `trace-mac` have no command-specific flags (besides global flags).
-- `DEST_PORT` is optional for `plan`/`deploy`; if omitted, destination switch self-MAC is used.
+- `DEST_PORT` is optional for `plan`/`deploy`; if omitted, the tool asks the matched L3 switch for `show ip arp <destination IP>` and uses that traceable ARP MAC. Destination self-MAC discovery remains a fallback if ARP does not return a usable MAC.
 - In `plan`/`deploy`, if `--vlan` is omitted the tool auto-selects a free VLAN from configured ranges.
 - For BDCOM OLT safety, deploy/trace aborts when downlink resolves to ONU terminal-style interfaces (`eponX/Y:Z` or `gponX/Y:Z`).
 
