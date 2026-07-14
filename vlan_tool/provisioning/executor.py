@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 
+from vlan_tool.provisioning.common import debug_note
 from vlan_tool.models import SwitchRecord
 
 
@@ -304,8 +305,3 @@ def looks_like_write_confirmation_prompt(output: str) -> bool:
             text,
         )
     )
-
-
-def debug_note(enabled: bool, message: str) -> None:
-    if enabled:
-        print(f"[debug] {message}")

@@ -25,15 +25,15 @@ from vlan_tool.provisioning.executor import (
     execute_actions_in_current_session as _execute_actions_in_current_session,
     save_running_config_if_needed as _save_running_config_if_needed,
 )
-from vlan_tool.provisioning.interfaces import (
+from vlan_tool.provisioning.neighbor import (
     discover_interface_description as _discover_interface_description,
     lookup_interface_description as _lookup_interface_description,
+    resolve_neighbor_from_description as _resolve_neighbor_from_description,
 )
 from vlan_tool.provisioning.ltp import (
     process_ltp_destination_hop as _process_ltp_destination_hop,
     process_ltp_intermediate_hop as _process_ltp_intermediate_hop,
 )
-from vlan_tool.provisioning.neighbor import resolve_neighbor_from_description as _resolve_neighbor_from_description
 from vlan_tool.provisioning.reports import (
     HopReport as _HopReport,
     render_live_path_plan as _render_live_path_plan,
@@ -134,7 +134,7 @@ def execute_live_path_plan(
                     debug,
                     f"Resolved destination MAC from L3 ARP: {destination_switch.host} -> {target_mac}",
                 )
-            elif not is_destination:
+            else:
                 _debug_note(
                     debug,
                     f"L3 ARP did not return a usable MAC for {destination_switch.host}; trying destination self-MAC.",

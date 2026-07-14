@@ -6,13 +6,13 @@ Not planning/deploy logic — just the transport layer used by commands and prov
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime
 import os
 from pathlib import Path
 import re
 import time
 from typing import Iterator
 
-from vlan_tool.logging_utils import build_session_log_path
 from vlan_tool.models import AppConfig, SwitchRecord
 
 try:
@@ -326,3 +326,12 @@ def _is_eltex_legacy_model(switch: SwitchRecord) -> bool:
     if switch.vendor != "eltex_mes":
         return False
     return "mes1124" in switch.name.casefold()
+
+
+def build_session_log_path(log_directory: Path, host: str) -> Path:
+    log_directory.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_host = "".join(
+        character if character.isalnum() or character in "._-" else "_" for character in host
+    )
+    return log_directory / f"{safe_host}_{timestamp}.log"

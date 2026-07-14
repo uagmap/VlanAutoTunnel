@@ -1,4 +1,4 @@
-"""CLI: deploy — live path with apply_changes=True (push create/tag commands)."""
+"""CLI: plan + deploy — shared live-path runner (dry-run vs apply)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ def run(
     config,
     request: ProvisioningRequest,
     *,
+    apply_changes: bool,
     debug: bool = True,
 ) -> int:
     effective_request = request
@@ -33,7 +34,7 @@ def run(
     for line in execute_live_path_plan(
         config,
         effective_request,
-        apply_changes=True,
+        apply_changes=apply_changes,
         debug=debug,
     ):
         print(line)

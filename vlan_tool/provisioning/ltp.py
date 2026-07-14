@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from vlan_tool.models import SwitchRecord
+from vlan_tool.provisioning.common import debug_note as _debug_note
 from vlan_tool.provisioning.discovery import pick_downlink_entry, pick_uplink_entry
 from vlan_tool.provisioning.executor import (
     is_benign_command_failure,
@@ -340,8 +341,3 @@ def extract_ltp_interface_description(*, running_config: str, interface: str, dr
         if description:
             return description
     return None
-
-
-def _debug_note(enabled: bool, message: str) -> None:
-    if enabled:
-        print(f"[debug] {message}")
