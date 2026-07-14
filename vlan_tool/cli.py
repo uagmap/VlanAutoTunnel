@@ -26,17 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Terminal tool for VLAN tunnel automation across mixed-vendor switches."
     )
     parser.add_argument(
-        "--confirm-steps",
+        "--nodebug",
         action="store_true",
         help=(
-            "Interactive safety mode: ask for confirmation before opening each switch session "
-            "and before every command sent to the switch."
+            "Quiet mode: hide live switch connect/command output. "
+            "Still prints chosen VLAN and the change summary."
         ),
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Print live debug output for connections and commands while running.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -57,12 +52,6 @@ def build_parser() -> argparse.ArgumentParser:
             "If omitted, the tool derives L3 as 10.7.X.Y -> 10.1.1.X."
         ),
     )
-    probe_parser.add_argument(
-        "--debug",
-        dest="probe_debug",
-        action="store_true",
-        help="Print live debug output while probing.",
-    )
 
     mac_parser = subparsers.add_parser(
         "trace-mac",
@@ -76,49 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Find the first free VLAN on an L3 switch using vendor-specific rules.",
     )
     free_vlan_parser.add_argument("switch", help="L3 switch name, alias, or IP.")
-    free_vlan_parser.add_argument(
-        "--debug",
-        dest="find_vlan_debug",
-        action="store_true",
-        help="Print live debug output while finding a VLAN.",
-    )
 
     plan_parser = subparsers.add_parser(
         "plan",
         help="Trace VLAN path live (destination-first) and report required changes (dry-run).",
     )
     _add_plan_arguments(plan_parser)
-    # Accept --confirm-steps after subcommand as well (same behavior as global flag).
-    plan_parser.add_argument(
-        "--confirm-steps",
-        dest="plan_confirm_steps",
-        action="store_true",
-        help="Ask before connecting/commands during live tracing.",
-    )
-    plan_parser.add_argument(
-        "--debug",
-        dest="plan_debug",
-        action="store_true",
-        help="Print live debug output while tracing.",
-    )
 
     deploy_parser = subparsers.add_parser(
         "deploy",
         help="Trace VLAN path live and apply required VLAN/tagging changes hop-by-hop.",
     )
     _add_plan_arguments(deploy_parser)
-    deploy_parser.add_argument(
-        "--confirm-steps",
-        dest="deploy_confirm_steps",
-        action="store_true",
-        help="Ask before connecting/commands during deployment.",
-    )
-    deploy_parser.add_argument(
-        "--debug",
-        dest="deploy_debug",
-        action="store_true",
-        help="Print live debug output while deploying.",
-    )
 
     return parser
 
@@ -127,55 +85,33 @@ def main() -> int:
     parser = build_parser()
     try:
         args = parser.parse_args()
-
+        debug = not args.nodebug
         config = load_config()
 
         if args.command == "resolve":
             return resolve.run(config, args.query)
         if args.command == "probe":
-            debug = args.debug or getattr(args, "probe_debug", False)
-            return probe.run(
-                config,
-                args.switch,
-                args.l3_switch,
-                confirm_steps=args.confirm_steps,
-                debug=debug,
-            )
+            return probe.run(config, args.switch, args.l3_switch, debug=debug)
         if args.command == "trace-mac":
-            return trace_mac.run(
-                config,
-                args.switch,
-                args.mac,
-                confirm_steps=args.confirm_steps,
-            )
+            return trace_mac.run(config, args.switch, args.mac, debug=debug)
         if args.command == "find-vlan":
-            debug = args.debug or getattr(args, "find_vlan_debug", False)
-            return find_vlan.run(
-                config,
-                args.switch,
-                confirm_steps=args.confirm_steps,
-                debug=debug,
-            )
+            return find_vlan.run(config, args.switch, debug=debug)
         if args.command == "plan":
-            confirm_steps = args.confirm_steps or getattr(args, "plan_confirm_steps", False)
-            debug = args.debug or getattr(args, "plan_debug", False)
             request = ProvisioningRequest(
                 l3_switch=args.l3_switch,
                 destination_switch=args.destination_switch,
                 destination_port=args.destination_port,
                 requested_vlan=args.vlan,
             )
-            return plan.run(config, request, confirm_steps=confirm_steps, debug=debug)
+            return plan.run(config, request, debug=debug)
         if args.command == "deploy":
-            confirm_steps = args.confirm_steps or getattr(args, "deploy_confirm_steps", False)
-            debug = args.debug or getattr(args, "deploy_debug", False)
             request = ProvisioningRequest(
                 l3_switch=args.l3_switch,
                 destination_switch=args.destination_switch,
                 destination_port=args.destination_port,
                 requested_vlan=args.vlan,
             )
-            return deploy.run(config, request, confirm_steps=confirm_steps, debug=debug)
+            return deploy.run(config, request, debug=debug)
 
         parser.error(f"Unsupported command: {args.command}")
         return 2
@@ -222,5 +158,3 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="Optional fixed VLAN ID (if omitted, tool auto-selects free VLAN).",
     )
-
-

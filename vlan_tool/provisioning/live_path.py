@@ -48,8 +48,7 @@ def execute_live_path_plan(
     request: ProvisioningRequest,
     *,
     apply_changes: bool,
-    confirm_steps: bool,
-    debug: bool,
+    debug: bool = True,
 ) -> list[str]:
     resolver = SwitchResolver(config)
     destination_switch = resolver.resolve(request.destination_switch)
@@ -95,8 +94,6 @@ def execute_live_path_plan(
     with open_switch_session(
         config,
         l3_switch,
-        confirm_connect=confirm_steps,
-        confirm_commands=confirm_steps,
         debug=debug,
     ) as session:
         _debug_note(debug, f"Collecting L3 state on {l3_switch.name} ({l3_switch.host})")
@@ -140,7 +137,6 @@ def execute_live_path_plan(
                 target_mac, fallback_source = _discover_target_mac(
                     config,
                     request,
-                    confirm_steps=confirm_steps,
                     debug=debug,
                 )
                 if target_mac:
@@ -281,8 +277,6 @@ def execute_live_path_plan(
         with open_switch_session(
             config,
             current_switch,
-            confirm_connect=confirm_steps,
-            confirm_commands=confirm_steps,
             debug=debug,
         ) as session:
             _debug_note(debug, f"Tracing hop on {current_switch.name} ({current_switch.host})")

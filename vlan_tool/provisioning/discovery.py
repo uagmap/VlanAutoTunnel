@@ -217,8 +217,7 @@ def discover_target_mac(
     config,
     request: ProvisioningRequest,
     *,
-    confirm_steps: bool,
-    debug: bool,
+    debug: bool = True,
 ) -> tuple[str | None, str]:
     resolver = SwitchResolver(config)
     destination_switch = resolver.resolve(request.destination_switch)
@@ -227,8 +226,6 @@ def discover_target_mac(
     with open_switch_session(
         config,
         destination_switch,
-        confirm_connect=confirm_steps,
-        confirm_commands=confirm_steps,
         debug=debug,
     ) as session:
         driver.prepare_session(session)

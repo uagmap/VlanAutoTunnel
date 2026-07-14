@@ -5,7 +5,7 @@ from vlan_tool.session import open_switch_session
 from vlan_tool.vendors import get_driver
 
 
-def run(config, switch_query: str, mac_address: str, *, confirm_steps: bool = False) -> int:
+def run(config, switch_query: str, mac_address: str, *, debug: bool = True) -> int:
     resolver = SwitchResolver(config)
     switch = resolver.resolve(switch_query)
     driver = get_driver(switch.vendor)
@@ -17,12 +17,7 @@ def run(config, switch_query: str, mac_address: str, *, confirm_steps: bool = Fa
         )
         return 1
 
-    with open_switch_session(
-        config,
-        switch,
-        confirm_connect=confirm_steps,
-        confirm_commands=confirm_steps,
-    ) as session:
+    with open_switch_session(config, switch, debug=debug) as session:
         driver.prepare_session(session)
         interface_statuses = {}
         if driver.capabilities.interface_inventory:

@@ -17,21 +17,14 @@ def run(
     switch_query: str,
     l3_override: str | None = None,
     *,
-    confirm_steps: bool = False,
-    debug: bool = False,
+    debug: bool = True,
 ) -> int:
     resolver = SwitchResolver(config)
     switch = resolver.resolve(switch_query)
     matched_l3, l3_reason = resolver.resolve_matched_l3(switch, override=l3_override)
     driver = get_driver(switch.vendor)
 
-    with open_switch_session(
-        config,
-        switch,
-        confirm_connect=confirm_steps,
-        confirm_commands=confirm_steps,
-        debug=debug,
-    ) as session:
+    with open_switch_session(config, switch, debug=debug) as session:
         driver.prepare_session(session)
         print(f"Connected to {switch.name} ({switch.host})")
         print(f"Driver: {driver.summary()}")

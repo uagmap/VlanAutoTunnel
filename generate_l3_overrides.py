@@ -213,8 +213,6 @@ def _scan_l3_vlan111(
     with open_switch_session(
         config,
         switch,
-        confirm_connect=False,
-        confirm_commands=False,
         debug=debug,
     ) as session:
         driver = get_driver(switch.vendor)

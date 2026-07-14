@@ -54,17 +54,14 @@ class SwitchSession:
         switch: SwitchRecord,
         session_log: Path,
         *,
-        confirm_commands: bool = False,
-        debug: bool = False,
+        debug: bool = True,
     ) -> None:
         self.connection = connection
         self.switch = switch
         self.session_log = session_log
-        self.confirm_commands = confirm_commands
         self.debug = debug
 
     def run_show(self, command: str, *, expect_string: str | None = None) -> str:
-        self._confirm_command_if_needed(command)
         self._debug_command(command)
         output = self.connection.send_command(
             command,
@@ -82,11 +79,6 @@ class SwitchSession:
         confirm_label: str | None = None,
         sensitive: bool = False,
     ) -> str:
-        self._confirm_command_if_needed(
-            command,
-            confirm_label=confirm_label,
-            sensitive=sensitive,
-        )
         self._debug_command(
             command,
             sensitive=sensitive,
@@ -102,7 +94,6 @@ class SwitchSession:
 
     def run_config_set(self, commands: list[str]) -> str:
         for command in commands:
-            self._confirm_command_if_needed(command)
             self._debug_command(command)
         output = self.connection.send_config_set(commands)
         self._debug_command_result(output)
@@ -110,32 +101,6 @@ class SwitchSession:
 
     def disconnect(self) -> None:
         self.connection.disconnect()
-
-    def _confirm_command_if_needed(
-        self,
-        command: str,
-        *,
-        confirm_label: str | None = None,
-        sensitive: bool = False,
-    ) -> None:
-        if not self.confirm_commands:
-            return
-
-        if sensitive:
-            label = confirm_label or "send sensitive value"
-            prompt = (
-                f"[confirm] Run action on {self.switch.name} ({self.switch.host}): "
-                f"{label}? [y/N]: "
-            )
-        else:
-            preview = confirm_label or repr(command)
-            prompt = (
-                f"[confirm] Run command on {self.switch.name} ({self.switch.host}): "
-                f"{preview}? [y/N]: "
-            )
-
-        if not _confirm_yes_no(prompt):
-            raise RuntimeError("Operation cancelled by user before sending command.")
 
     def _debug_command(
         self,
@@ -164,9 +129,7 @@ def open_switch_session(
     config: AppConfig,
     switch: SwitchRecord,
     *,
-    confirm_connect: bool = False,
-    confirm_commands: bool = False,
-    debug: bool = False,
+    debug: bool = True,
 ) -> Iterator[SwitchSession]:
     if ConnectHandler is None:
         raise RuntimeError("netmiko is not installed. Install dependencies before connecting.")
@@ -176,23 +139,11 @@ def open_switch_session(
     max_attempts = 1 if _is_eltex_legacy_model(switch) else 3
     if debug:
         print(f"[debug] Connecting to {switch.name} ({switch.host}) via {device_type}")
-    if confirm_connect:
-        if not _confirm_yes_no(
-            f"[confirm] Connect to {switch.name} ({switch.host}) using {device_type}? [y/N]: "
-        ):
-            raise RuntimeError("Operation cancelled by user before connecting to switch.")
 
     connection = None
     last_transient_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-
-            # Enable netmiko debug logging for telnet troubleshooting
-            #if debug:
-            #    import logging
-            #    logging.basicConfig(level=logging.DEBUG)
-
-
             username, password, secret = _resolve_telnet_credentials(config, switch)
             connection_kwargs = dict(
                 device_type=device_type,
@@ -268,7 +219,6 @@ def open_switch_session(
             connection=connection,
             switch=switch,
             session_log=session_log,
-            confirm_commands=confirm_commands,
             debug=debug,
         )
     finally:
@@ -371,8 +321,3 @@ def _is_eltex_legacy_model(switch: SwitchRecord) -> bool:
     if switch.vendor != "eltex_mes":
         return False
     return "mes1124" in switch.name.casefold()
-
-
-def _confirm_yes_no(prompt: str) -> bool:
-    answer = input(prompt).strip().casefold()
-    return answer in {"y", "yes"}

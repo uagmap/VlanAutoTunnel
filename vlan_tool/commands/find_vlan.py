@@ -10,8 +10,7 @@ def run(
     config,
     switch_query: str,
     *,
-    confirm_steps: bool = False,
-    debug: bool = False,
+    debug: bool = True,
 ) -> int:
     resolver = SwitchResolver(config)
     switch = resolver.resolve(switch_query)
@@ -32,13 +31,7 @@ def run(
             f"Warning: {switch.host} does not match expected L3 pattern 10.1.1.X. Continuing anyway."
         )
 
-    with open_switch_session(
-        config,
-        switch,
-        confirm_connect=confirm_steps,
-        confirm_commands=confirm_steps,
-        debug=debug,
-    ) as session:
+    with open_switch_session(config, switch, debug=debug) as session:
         driver.prepare_session(session)
         result = driver.find_free_vlan(session, ranges)
         print(f"Session log: {session.session_log}")

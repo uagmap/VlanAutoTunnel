@@ -11,15 +11,13 @@ def run(
     config,
     request: ProvisioningRequest,
     *,
-    confirm_steps: bool = False,
-    debug: bool = False,
+    debug: bool = True,
 ) -> int:
     effective_request = request
     if not request.target_mac and request.destination_port:
         discovered, discovery_source = discover_target_mac(
             config,
             request,
-            confirm_steps=confirm_steps,
             debug=debug,
         )
         if not discovered:
@@ -34,7 +32,6 @@ def run(
         config,
         effective_request,
         apply_changes=True,
-        confirm_steps=confirm_steps,
         debug=debug,
     ):
         print(line)
