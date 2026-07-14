@@ -1,3 +1,5 @@
+"""Load config.yaml + .env into AppConfig. No business logic."""
+
 from __future__ import annotations
 
 import os

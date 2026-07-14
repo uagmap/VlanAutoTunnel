@@ -1,3 +1,8 @@
+"""Telnet/Netmiko connection wrapper: open a switch, run commands, write session logs.
+
+Not planning/deploy logic — just the transport layer used by commands and provisioning.
+"""
+
 from __future__ import annotations
 
 from contextlib import contextmanager

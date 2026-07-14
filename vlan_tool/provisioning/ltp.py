@@ -1,3 +1,8 @@
+"""LTP-specific hop handling (blanket VLAN tagging differs from normal trunk hops).
+
+Only used when the current hop vendor is LTP; keeps that special case out of live_path.
+"""
+
 from __future__ import annotations
 
 import re

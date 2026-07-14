@@ -1,3 +1,5 @@
+"""Tiny shared helpers: debug prints, invalid-command / junk-MAC checks."""
+
 from __future__ import annotations
 
 import re

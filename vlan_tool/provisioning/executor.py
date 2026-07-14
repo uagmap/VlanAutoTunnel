@@ -1,3 +1,8 @@
+"""Run queued CLI action strings on an already-open switch session (config mode + save).
+
+live_path decides *what* to change; this module pushes the commands.
+"""
+
 from __future__ import annotations
 
 import re

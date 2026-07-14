@@ -1,3 +1,5 @@
+"""Resolve switch name/IP -> SwitchRecord (Zabbix + L3 IP mapping)."""
+
 from __future__ import annotations
 
 import ipaddress

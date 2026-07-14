@@ -1,3 +1,5 @@
+"""CLI: find-vlan — pick first free VLAN on an L3 from configured ranges."""
+
 from __future__ import annotations
 
 from vlan_tool.provisioning.discovery import looks_like_l3_ip, select_vlan_ranges

@@ -1,3 +1,5 @@
+"""Shared dataclasses: AppConfig, SwitchRecord, ProvisioningRequest, etc."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

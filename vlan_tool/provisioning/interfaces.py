@@ -1,3 +1,8 @@
+"""Read interface descriptions (from status cache or live show commands).
+
+Used to identify the neighbor switch name glued onto a trunk port.
+"""
+
 from __future__ import annotations
 
 import re

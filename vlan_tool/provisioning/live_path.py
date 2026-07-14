@@ -1,3 +1,8 @@
+"""plan/deploy orchestration: hop-by-hop VLAN path from destination back toward L3.
+
+This is the main live workflow. Other provisioning modules are helpers it calls.
+"""
+
 from __future__ import annotations
 
 from vlan_tool.models import ProvisioningRequest

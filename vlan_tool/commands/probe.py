@@ -1,3 +1,5 @@
+"""CLI: probe — open Telnet and run vendor probe commands (connectivity check)."""
+
 from __future__ import annotations
 
 from vlan_tool.provisioning.common import looks_like_login_output

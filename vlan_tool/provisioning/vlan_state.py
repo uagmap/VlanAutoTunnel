@@ -1,3 +1,8 @@
+"""Snapshot whether a VLAN exists and whether uplink/downlink ports already tag it.
+
+live_path uses this to decide create/tag actions vs skip.
+"""
+
 from __future__ import annotations
 
 import re

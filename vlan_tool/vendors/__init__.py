@@ -1,3 +1,5 @@
+"""Vendor driver registry: map vendor_key -> concrete VendorDriver instance."""
+
 from __future__ import annotations
 
 from vlan_tool.vendors.arista import AristaDriver

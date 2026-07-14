@@ -1,3 +1,5 @@
+"""CLI: deploy — live path with apply_changes=True (push create/tag commands)."""
+
 from __future__ import annotations
 
 from dataclasses import replace

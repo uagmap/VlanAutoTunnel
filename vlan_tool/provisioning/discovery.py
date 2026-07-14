@@ -1,3 +1,8 @@
+"""Find things needed before/during a path walk: free VLAN, target MAC, L3 MAC, MAC-table picks.
+
+Read-only discovery helpers — does not apply config changes.
+"""
+
 from __future__ import annotations
 
 import ipaddress

@@ -1,3 +1,5 @@
+"""VendorDriver base class + capability flags. One subclass per platform under vendors/."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

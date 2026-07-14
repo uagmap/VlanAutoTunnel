@@ -1,3 +1,8 @@
+"""Vendor-specific CLI snippets for create-VLAN and trunk-tag actions.
+
+Returns command bundles as strings; executor/live_path send them to the switch.
+"""
+
 from __future__ import annotations
 
 import re

@@ -1,3 +1,5 @@
+"""Session log filename helpers under log_directory."""
+
 from __future__ import annotations
 
 from datetime import datetime

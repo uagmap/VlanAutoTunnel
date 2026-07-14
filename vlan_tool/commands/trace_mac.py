@@ -1,3 +1,5 @@
+"""CLI: mac — look up one MAC on one switch via the vendor driver."""
+
 from __future__ import annotations
 
 from vlan_tool.resolver import SwitchResolver

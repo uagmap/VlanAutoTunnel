@@ -1,3 +1,5 @@
+"""CLI: resolve — print Zabbix-resolved switch + matched L3."""
+
 from __future__ import annotations
 
 from vlan_tool.resolver import SwitchResolver

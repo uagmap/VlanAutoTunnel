@@ -1,3 +1,8 @@
+"""Turn a port description string into the next SwitchRecord via Zabbix name matching.
+
+That is how live_path walks hop-to-hop without a static topology map.
+"""
+
 from __future__ import annotations
 
 import ipaddress

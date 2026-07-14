@@ -1,3 +1,5 @@
+"""CLI argument parsing and command dispatch (main.py entry)."""
+
 from __future__ import annotations
 
 import argparse

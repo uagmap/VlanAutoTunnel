@@ -1,3 +1,5 @@
+"""CLI: plan — dry-run live path (report required VLAN/tag changes, apply nothing)."""
+
 from __future__ import annotations
 
 from dataclasses import replace

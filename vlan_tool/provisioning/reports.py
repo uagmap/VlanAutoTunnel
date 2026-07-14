@@ -1,3 +1,5 @@
+"""Format hop reports / plan+deploy summary text for the operator."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
