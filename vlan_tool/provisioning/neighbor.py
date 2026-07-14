@@ -7,6 +7,13 @@ from vlan_tool.models import SwitchRecord
 from vlan_tool.resolver import SwitchResolver
 
 
+# Trailing fiber metadata often glued onto L3/downlink descriptions.
+_OPTICAL_TRAILING_RE = re.compile(
+    r"(?:[_\-\s]+(?:\d{3,4}\s*nm|\d+\s*km|1[2-6]\d{2}))+$",
+    re.IGNORECASE,
+)
+
+
 def resolve_neighbor_from_description(
     resolver: SwitchResolver,
     description: str | None,
@@ -19,8 +26,12 @@ def resolve_neighbor_from_description(
     base = description.strip().strip("\"'`")
     if not base:
         return None
+    # ponytail: strip nm/km/wavelength suffixes before Zabbix/name matching.
+    cleaned = strip_optical_link_noise(base) or base
+    if debug and cleaned != base:
+        _debug_note(debug, f"Normalized neighbor description '{base}' -> '{cleaned}'")
 
-    id_token = extract_id_token(base)
+    id_token = extract_id_token(cleaned) or extract_id_token(base)
     if id_token:
         try:
             resolved_by_id = resolver.resolve(id_token)
@@ -28,7 +39,7 @@ def resolve_neighbor_from_description(
             resolved_by_id = None
         if resolved_by_id:
             score = score_neighbor_match(
-                description=base,
+                description=cleaned,
                 switch=resolved_by_id,
                 source_switch=source_switch,
             )
@@ -37,7 +48,7 @@ def resolve_neighbor_from_description(
                     _debug_note(
                         debug,
                         "Resolved next hop from description "
-                        f"'{base}' via ID '{id_token}' -> {resolved_by_id.name} ({resolved_by_id.host})",
+                        f"'{cleaned}' via ID '{id_token}' -> {resolved_by_id.name} ({resolved_by_id.host})",
                     )
                 return resolved_by_id
             if debug:
@@ -47,7 +58,7 @@ def resolve_neighbor_from_description(
                     f"'{id_token}' -> {resolved_by_id.name} ({resolved_by_id.host}) score={score}",
                 )
 
-    candidates = build_neighbor_resolution_candidates(base)
+    candidates = build_neighbor_resolution_candidates(cleaned)
     best: tuple[int, str, SwitchRecord] | None = None
     for candidate in candidates:
         if id_token and candidate.casefold() == id_token:
@@ -57,7 +68,7 @@ def resolve_neighbor_from_description(
         except LookupError:
             continue
         score = score_neighbor_match(
-            description=base,
+            description=cleaned,
             switch=resolved,
             source_switch=source_switch,
         )
@@ -77,13 +88,24 @@ def resolve_neighbor_from_description(
         _debug_note(
             debug,
             "Resolved next hop from description "
-            f"'{base}' via candidate '{candidate}' -> {resolved.name} ({resolved.host})",
+            f"'{cleaned}' via candidate '{candidate}' -> {resolved.name} ({resolved.host})",
         )
     return best[2] if best else None
 
 
+def strip_optical_link_noise(text: str) -> str:
+    cleaned = text.strip().strip("\"'`")
+    while True:
+        updated = _OPTICAL_TRAILING_RE.sub("", cleaned)
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned.rstrip("_- \t")
+
+
 def build_neighbor_resolution_candidates(description: str) -> list[str]:
     candidates: list[str] = []
+    cleaned = strip_optical_link_noise(description) or description.strip()
 
     def _add(value: str | None) -> None:
         if not value:
@@ -92,19 +114,48 @@ def build_neighbor_resolution_candidates(description: str) -> list[str]:
         if text and text not in candidates:
             candidates.append(text)
 
-    _add(description)
-    primary = re.split(r"[\s,;]+", description, maxsplit=1)[0]
+    _add(cleaned)
+    without_id = description_without_id(cleaned)
+    _add(without_id)
+    primary = re.split(r"[\s,;]+", cleaned, maxsplit=1)[0]
     _add(primary)
+    _add(description_without_id(primary))
 
-    id_token = extract_id_token(description)
+    id_token = extract_id_token(cleaned)
     if id_token:
         _add(id_token)
 
     if primary and "." in primary:
         _, _, tail = primary.partition(".")
         _add(tail)
+        _add(description_without_id(tail))
 
     return candidates
+
+
+def description_without_id(text: str) -> str:
+    cleaned = re.sub(r"[_\-.]?id\d{3,}", "", text, flags=re.IGNORECASE)
+    return cleaned.strip("._- \t")
+
+
+def strong_name_match(description: str, switch: SwitchRecord) -> bool:
+    """True when description matches switch hostname aside from optional id/optical noise."""
+    probe = description_without_id(strip_optical_link_noise(description) or description).casefold()
+    if not probe or len(probe) < 8:
+        return False
+    names = [switch.name.casefold(), *(alias.casefold() for alias in (switch.aliases or []) if alias)]
+    for name in names:
+        if not name:
+            continue
+        if probe == name:
+            return True
+        if probe.startswith(f"{name}.") or probe.startswith(f"{name}_"):
+            return True
+        if name.startswith(f"{probe}.") or name.startswith(f"{probe}_"):
+            return True
+        if len(name) >= 8 and (probe in name or name in probe):
+            return True
+    return False
 
 
 def is_confident_neighbor_match(description: str, switch: SwitchRecord) -> bool:
@@ -114,15 +165,19 @@ def is_confident_neighbor_match(description: str, switch: SwitchRecord) -> bool:
 
     if probe and (probe == switch.host.casefold() or probe in blob):
         return True
+    if strong_name_match(description, switch):
+        return True
 
     id_token = extract_id_token(probe)
-    if id_token:
-        return id_token in blob
+    if id_token and id_token in blob:
+        return True
 
     tokens = description_tokens_for_match(probe)
     if not tokens:
         return False
-    matched = [token for token in tokens if token in blob]
+    # Name-only tokens: ignore id* when the switch hostname simply omits the inventory id.
+    name_tokens = [token for token in tokens if not (token.startswith("id") and token[2:].isdigit())]
+    matched = [token for token in name_tokens if token in blob]
     if len(matched) >= 2:
         return True
     if len(matched) == 1 and len(matched[0]) >= 8:
@@ -148,13 +203,13 @@ def score_neighbor_match(
         score += 500
     elif probe in blob:
         score += 240
+    elif strong_name_match(description, switch):
+        score += 220
 
     id_token = extract_id_token(probe)
-    if id_token:
-        if id_token in blob:
-            score += 360
-        else:
-            return 0
+    if id_token and id_token in blob:
+        score += 360
+    # ponytail: many Zabbix hosts omit idNNNN even when the port description has it.
 
     tokens = description_tokens_for_match(probe)
     matched = [token for token in tokens if token in blob]
@@ -167,7 +222,7 @@ def score_neighbor_match(
             source_switch=source_switch,
             candidate_switch=switch,
             description=probe,
-            has_id_token=bool(id_token),
+            has_id_token=bool(id_token and id_token in blob),
         ):
             # Fail-safe bias: avoid silent jumps to unrelated map names.
             score -= 320
@@ -255,6 +310,17 @@ def extract_id_token(text: str) -> str | None:
     return match.group(0)
 
 
+def is_optical_noise_token(token: str) -> bool:
+    lowered = token.casefold()
+    if re.fullmatch(r"\d{3,4}nm", lowered):
+        return True
+    if re.fullmatch(r"\d+km", lowered):
+        return True
+    if lowered.isdigit() and 1200 <= int(lowered) <= 1700:
+        return True
+    return False
+
+
 def description_tokens_for_match(text: str) -> list[str]:
     ignored = {
         "snr",
@@ -271,6 +337,8 @@ def description_tokens_for_match(text: str) -> list[str]:
     tokens: list[str] = []
     for token in re.findall(r"[a-z0-9]+", text.casefold()):
         if token in ignored:
+            continue
+        if is_optical_noise_token(token):
             continue
         if token.startswith("id") and token[2:].isdigit():
             tokens.append(token)

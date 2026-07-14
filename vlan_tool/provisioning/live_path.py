@@ -79,6 +79,7 @@ def execute_live_path_plan(
 
     l3_driver = get_driver(l3_switch.vendor)
     hop_reports: list[_HopReport] = []
+    trace_stopped_at_sensitive = False
     chosen_vlan: int | None = None
     chosen_vlan_reason = ""
     l3_trace_mac: str | None = None
@@ -131,7 +132,7 @@ def execute_live_path_plan(
                     debug,
                     f"Resolved destination MAC from L3 ARP: {destination_switch.host} -> {target_mac}",
                 )
-            else:
+            elif not is_destination:
                 _debug_note(
                     debug,
                     f"L3 ARP did not return a usable MAC for {destination_switch.host}; trying destination self-MAC.",
@@ -343,14 +344,16 @@ def execute_live_path_plan(
             notes: list[str] = []
             actions: list[str] = []
             applied_actions: list[str] = []
+            sensitive_stop = False
 
             if apply_changes or not vlan_exists:
                 create_action = _build_vlan_create_action(
                     current_driver.vendor_key,
                     chosen_vlan,
                 )
-                actions.append(create_action)
-                if apply_changes:
+                if create_action:
+                    actions.append(create_action)
+                if apply_changes and create_action:
                     _debug_note(
                         debug,
                         f"Creating VLAN {chosen_vlan} on {current_switch.name} before trunk-tag checks.",
@@ -397,21 +400,20 @@ def execute_live_path_plan(
                     )
                 )
 
-            if is_destination:
+            if is_destination and request.destination_port:
                 target_entries = current_driver.lookup_mac(session, target_mac)
                 destination_entry = _pick_downlink_entry(target_entries)
                 if destination_entry:
-                    if request.destination_port:
-                        if current_driver.normalize_interface(
-                            destination_entry.interface
-                        ) != current_driver.normalize_interface(request.destination_port):
-                            notes.append(
-                                f"Destination MAC currently appears on {destination_entry.interface}, "
-                                f"not requested port {request.destination_port}."
-                            )
+                    if current_driver.normalize_interface(
+                        destination_entry.interface
+                    ) != current_driver.normalize_interface(request.destination_port):
+                        notes.append(
+                            f"Destination MAC currently appears on {destination_entry.interface}, "
+                            f"not requested port {request.destination_port}."
+                        )
                 else:
                     notes.append("Destination MAC was not visible on destination switch during this trace.")
-            else:
+            elif not is_destination:
                 downlink_entries = current_driver.lookup_mac(session, target_mac)
                 downlink_entry = _pick_downlink_entry(downlink_entries)
                 if not downlink_entry:
@@ -419,48 +421,53 @@ def execute_live_path_plan(
                         f"{current_switch.name} did not find destination MAC {target_mac} in MAC table."
                     )
                 downlink_interface = downlink_entry.interface
-                if _is_sensitive_olt_terminal_interface(downlink_interface):
-                    raise RuntimeError(
-                        "Aborting automatic deploy on sensitive ONU terminal interface "
-                        f"{downlink_interface} at {current_switch.name} ({current_switch.host}). "
-                        "This endpoint type requires dedicated ONU-safe workflow."
+                if _is_sensitive_olt_terminal_interface(
+                    downlink_interface,
+                    vendor_key=current_driver.vendor_key,
+                ):
+                    sensitive_stop = True
+                    trace_stopped_at_sensitive = True
+                    notes.append(
+                        "Stopping trace at sensitive ONU terminal downlink "
+                        f"{downlink_interface}. Continue manually with ONU-safe workflow."
                     )
-                downlink_tagged = _snapshot_interface_tagged(
-                    driver=current_driver,
-                    vlan_id=chosen_vlan,
-                    interface=downlink_interface,
-                    snapshot=snapshot,
-                )
-                if downlink_tagged is False:
-                    actions.append(
-                        _build_vlan_tag_action(
-                            vendor_key=current_driver.vendor_key,
-                            interface=downlink_interface,
-                            vlan_id=chosen_vlan,
+                else:
+                    downlink_tagged = _snapshot_interface_tagged(
+                        driver=current_driver,
+                        vlan_id=chosen_vlan,
+                        interface=downlink_interface,
+                        snapshot=snapshot,
+                    )
+                    if downlink_tagged is False:
+                        actions.append(
+                            _build_vlan_tag_action(
+                                vendor_key=current_driver.vendor_key,
+                                interface=downlink_interface,
+                                vlan_id=chosen_vlan,
+                            )
                         )
-                    )
-                downlink_description = _lookup_interface_description(
-                    statuses=current_statuses,
-                    driver=current_driver,
-                    interface=downlink_interface,
-                )
-                if not downlink_description:
-                    downlink_description = _discover_interface_description(
-                        session=session,
+                    downlink_description = _lookup_interface_description(
+                        statuses=current_statuses,
                         driver=current_driver,
                         interface=downlink_interface,
                     )
-                neighbor_switch = _resolve_neighbor_from_description(
-                    resolver,
-                    downlink_description,
-                    source_switch=current_switch,
-                    debug=debug,
-                )
-                if not neighbor_switch:
-                    raise RuntimeError(
-                        f"Unable to resolve next-hop from {current_switch.name} "
-                        f"interface {downlink_interface} description '{downlink_description or '-'}'."
+                    if not downlink_description:
+                        downlink_description = _discover_interface_description(
+                            session=session,
+                            driver=current_driver,
+                            interface=downlink_interface,
+                        )
+                    neighbor_switch = _resolve_neighbor_from_description(
+                        resolver,
+                        downlink_description,
+                        source_switch=current_switch,
+                        debug=debug,
                     )
+                    if not neighbor_switch:
+                        raise RuntimeError(
+                            f"Unable to resolve next-hop from {current_switch.name} "
+                            f"interface {downlink_interface} description '{downlink_description or '-'}'."
+                        )
 
             hop_report = _HopReport(
                 switch=current_switch,
@@ -497,6 +504,8 @@ def execute_live_path_plan(
                 )
             hop_reports.append(hop_report)
 
+            if sensitive_stop:
+                break
             if is_destination:
                 break
             current_switch = neighbor_switch
@@ -519,4 +528,10 @@ def execute_live_path_plan(
         apply_requested=apply_changes,
         executed_commands=executed_commands,
     )
+    if trace_stopped_at_sensitive:
+        lines.append("")
+        lines.append(
+            "Trace stopped at sensitive ONU terminal downlink. "
+            "Upstream VLAN/tag actions above are included; continue manually from the ONU port."
+        )
     return lines
