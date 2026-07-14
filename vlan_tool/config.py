@@ -9,8 +9,6 @@ from vlan_tool.models import (
     AppConfig,
     L3MappingSettings,
     L3SubnetOverride,
-    SiteDefinition,
-    SwitchRecord,
     TelnetSettings,
     VlanRange,
     ZabbixSettings,
@@ -40,16 +38,10 @@ def load_config(path: Path | None = None) -> AppConfig:
     telnet_raw = raw.get("telnet", {})
     zabbix_raw = raw.get("zabbix", {})
     l3_mapping_raw = raw.get("l3_mapping", {}) or {}
-    inventory_raw = raw.get("inventory", []) or []
-    sites_raw = raw.get("sites", []) or []
     vlan_ranges_raw = raw.get("vlan_ranges", []) or []
 
     if not isinstance(l3_mapping_raw, dict):
         raise ValueError("Config key 'l3_mapping' must be a mapping.")
-    if not isinstance(inventory_raw, list):
-        raise ValueError("Config key 'inventory' must be a list.")
-    if not isinstance(sites_raw, list):
-        raise ValueError("Config key 'sites' must be a list.")
     if not isinstance(vlan_ranges_raw, list):
         raise ValueError("Config key 'vlan_ranges' must be a list.")
 
@@ -130,9 +122,6 @@ def load_config(path: Path | None = None) -> AppConfig:
             "(VLAN_ZABBIX_USERNAME + VLAN_ZABBIX_PASSWORD), plus VLAN_ZABBIX_URL."
         )
 
-    inventory = [_parse_switch(item) for item in inventory_raw]
-    parsed_sites = [_parse_site(item) for item in sites_raw]
-    sites = {site.name: site for site in parsed_sites}
     vlan_ranges = _parse_vlan_ranges(vlan_ranges_raw, context="vlan_ranges")
     l3_mapping = L3MappingSettings(
         overrides=_parse_l3_overrides(l3_mapping_raw.get("overrides", [])),
@@ -145,52 +134,6 @@ def load_config(path: Path | None = None) -> AppConfig:
         zabbix=zabbix,
         l3_mapping=l3_mapping,
         vlan_ranges=vlan_ranges,
-        inventory=inventory,
-        sites=sites,
-        vendors=raw.get("vendors", {}),
-    )
-
-
-def _parse_switch(raw: dict) -> SwitchRecord:
-    if not isinstance(raw, dict):
-        raise ValueError("Each inventory entry must be a mapping.")
-
-    metadata = {
-        key: value
-        for key, value in raw.items()
-        if key
-        not in {
-            "name",
-            "host",
-            "vendor",
-            "device_type",
-            "role",
-            "site",
-            "aliases",
-            "requires_enable",
-        }
-    }
-    return SwitchRecord(
-        name=str(raw["name"]),
-        host=str(raw["host"]),
-        vendor=str(raw["vendor"]),
-        device_type=_optional_str(raw.get("device_type")),
-        role=_optional_str(raw.get("role")),
-        site=_optional_str(raw.get("site")),
-        aliases=[str(alias) for alias in raw.get("aliases", [])],
-        requires_enable=bool(raw.get("requires_enable", False)),
-        metadata=metadata,
-    )
-
-
-def _parse_site(raw: dict) -> SiteDefinition:
-    if not isinstance(raw, dict):
-        raise ValueError("Each site entry must be a mapping.")
-
-    return SiteDefinition(
-        name=str(raw["name"]),
-        core_switches=[str(name) for name in raw.get("core_switches", [])],
-        vlan_ranges=_parse_vlan_ranges(raw.get("vlan_ranges", []), context=f"site:{raw['name']}.vlan_ranges"),
     )
 
 

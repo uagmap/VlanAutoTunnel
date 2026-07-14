@@ -25,14 +25,7 @@ zabbix:
 # Use CIDR subnets on the left and explicit L3 management IP on the right.
 l3_mapping:
   overrides:
-    - subnet: 10.7.101.0/24
-      l3_ip: 10.1.1.1
-    - subnet: 10.7.202.0/24
-      l3_ip: 10.1.1.1
-    - subnet: 10.7.30.0/24
-      l3_ip: 10.1.1.1
-    - subnet: 10.7.108.0/24
-      l3_ip: 10.1.1.8
+    
 
 # Global candidate ranges used for every L3 switch.
 # The workflow should try these ranges in order and fail only when both are full.
@@ -41,19 +34,3 @@ vlan_ranges:
     end: 299
   - start: 1025
     end: 1299
-
-# Optional site-specific overrides. Leave empty if all sites are the same.
-sites: []
-
-# For large fleets, keep inventory empty and resolve all switches through Zabbix.
-inventory: []
-
-vendors:
-  cisco_ios:
-    notes: Cisco defaults are pre-wired in code.
-  snr:
-    notes: SNR parsing is implemented from provided samples.
-  eltex_mes:
-    notes: Eltex MES parsing is implemented from provided samples.
-  bdcom:
-    notes: BDCOM OLT/switch support is implemented for VLAN create + MAC tracing basics.

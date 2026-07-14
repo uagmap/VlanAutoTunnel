@@ -175,7 +175,7 @@ def is_confident_neighbor_match(description: str, switch: SwitchRecord) -> bool:
     tokens = description_tokens_for_match(probe)
     if not tokens:
         return False
-    # Name-only tokens: ignore id* when the switch hostname simply omits the inventory id.
+    # Name-only tokens: ignore id* when the switch hostname simply omits the host id.
     name_tokens = [token for token in tokens if not (token.startswith("id") and token[2:].isdigit())]
     matched = [token for token in name_tokens if token in blob]
     if len(matched) >= 2:

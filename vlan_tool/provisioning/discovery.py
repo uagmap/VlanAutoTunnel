@@ -366,9 +366,7 @@ def select_preferred_mac_entry(entries: list[MacTableEntry]) -> MacTableEntry:
     return sorted(entries, key=_score, reverse=True)[0]
 
 
-def select_vlan_ranges(config, switch: SwitchRecord) -> list[VlanRange]:
-    if switch.site and switch.site in config.sites and config.sites[switch.site].vlan_ranges:
-        return config.sites[switch.site].vlan_ranges
+def select_vlan_ranges(config) -> list[VlanRange]:
     return config.vlan_ranges
 
 

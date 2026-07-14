@@ -98,7 +98,7 @@ def execute_live_path_plan(
     ) as session:
         _debug_note(debug, f"Collecting L3 state on {l3_switch.name} ({l3_switch.host})")
         l3_driver.prepare_session(session)
-        ranges = _select_vlan_ranges(config, l3_switch)
+        ranges = _select_vlan_ranges(config)
         chosen_vlan, chosen_vlan_reason = _select_vlan_for_plan(
             session=session,
             driver=l3_driver,

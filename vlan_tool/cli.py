@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     mac_parser = subparsers.add_parser(
-        "trace-mac",
+        "mac",
         help="Look up a MAC address on a switch when the vendor driver supports it.",
     )
     mac_parser.add_argument("switch", help="Switch name, alias, or IP.")
@@ -92,7 +92,7 @@ def main() -> int:
             return resolve.run(config, args.query)
         if args.command == "probe":
             return probe.run(config, args.switch, args.l3_switch, debug=debug)
-        if args.command == "trace-mac":
+        if args.command == "mac":
             return trace_mac.run(config, args.switch, args.mac, debug=debug)
         if args.command == "find-vlan":
             return find_vlan.run(config, args.switch, debug=debug)

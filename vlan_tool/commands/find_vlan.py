@@ -21,7 +21,7 @@ def run(
         )
         return 1
 
-    ranges = select_vlan_ranges(config, switch)
+    ranges = select_vlan_ranges(config)
     if not ranges:
         print("No VLAN ranges configured. Add 'vlan_ranges' in config.yaml.")
         return 1

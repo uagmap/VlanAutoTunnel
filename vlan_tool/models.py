@@ -35,13 +35,6 @@ class VlanRange:
 
 
 @dataclass(slots=True)
-class SiteDefinition:
-    name: str
-    core_switches: list[str] = field(default_factory=list)
-    vlan_ranges: list[VlanRange] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class L3SubnetOverride:
     subnet: str
     l3_ip: str
@@ -59,7 +52,6 @@ class SwitchRecord:
     vendor: str
     device_type: str | None = None
     role: str | None = None
-    site: str | None = None
     aliases: list[str] = field(default_factory=list)
     requires_enable: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -77,9 +69,6 @@ class AppConfig:
     zabbix: ZabbixSettings
     l3_mapping: L3MappingSettings = field(default_factory=L3MappingSettings)
     vlan_ranges: list[VlanRange] = field(default_factory=list)
-    inventory: list[SwitchRecord] = field(default_factory=list)
-    sites: dict[str, SiteDefinition] = field(default_factory=dict)
-    vendors: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

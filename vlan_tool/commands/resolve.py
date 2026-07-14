@@ -10,7 +10,6 @@ def run(config, query: str) -> int:
     print(f"Host: {switch.host}")
     print(f"Vendor: {switch.vendor}")
     print(f"Device type: {switch.device_type or 'auto'}")
-    print(f"Site: {switch.site or 'n/a'}")
     print(f"Role: {switch.role or 'n/a'}")
     matched_l3, l3_reason = resolver.resolve_matched_l3(switch)
     if matched_l3:

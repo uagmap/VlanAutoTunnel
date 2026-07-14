@@ -42,14 +42,9 @@ def build_plan(config: AppConfig, request: ProvisioningRequest) -> list[str]:
     else:
         lines.append(f"Auto-matched L3 from destination: n/a ({auto_l3_reason})")
 
-    site_name = l3_switch.site or destination_switch.site
-    if site_name and site_name in config.sites and config.sites[site_name].vlan_ranges:
-        site = config.sites[site_name]
-        ranges = ", ".join(f"{item.start}-{item.end}" for item in site.vlan_ranges) or "not set"
-        lines.append(f"Candidate VLAN ranges for site {site.name}: {ranges}")
-    elif config.vlan_ranges:
+    if config.vlan_ranges:
         ranges = ", ".join(f"{item.start}-{item.end}" for item in config.vlan_ranges)
-        lines.append(f"Candidate VLAN ranges (global default): {ranges}")
+        lines.append(f"Candidate VLAN ranges: {ranges}")
     else:
         lines.append("Candidate VLAN ranges: not configured yet.")
 
@@ -66,7 +61,7 @@ def build_plan(config: AppConfig, request: ProvisioningRequest) -> list[str]:
         [
             "",
             "Planned workflow:",
-            "1. Resolve the L3 and destination switches from inventory or Zabbix.",
+            "1. Resolve the L3 and destination switches from Zabbix.",
             "2. Discover a target MAC on destination port when not explicitly provided.",
             "3. Connect to the L3 switch with Netmiko over Telnet and record the full session log.",
             (

@@ -15,3 +15,5 @@ CONTINUITY.md
 *.txt
 test*.py
 CODE_GUIDE.md
+generate_l3_overrides.py
+zabbix_name_ip_resolver.py

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import ipaddress
 import re
 
@@ -20,14 +19,7 @@ except ImportError:  # pragma: no cover - optional until dependencies are instal
 class SwitchResolver:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self._inventory: list[SwitchRecord] = []
-        self._inventory_index = {}
         self._l3_subnet_overrides: list[tuple[ipaddress.IPv4Network, str]] = []
-        for switch in config.inventory:
-            normalized_switch = _normalize_inventory_switch_vendor(switch)
-            self._inventory.append(normalized_switch)
-            for name in switch.all_names:
-                self._inventory_index[name.casefold()] = normalized_switch
         for rule in config.l3_mapping.overrides:
             try:
                 network = ipaddress.ip_network(rule.subnet, strict=False)
@@ -38,10 +30,6 @@ class SwitchResolver:
             self._l3_subnet_overrides.append((network, rule.l3_ip))
 
     def resolve(self, query: str) -> SwitchRecord:
-        direct_match = self._inventory_index.get(query.casefold())
-        if direct_match:
-            return direct_match
-
         if _is_ip_address(query):
             try:
                 zabbix_ip_match = self._resolve_ip_from_zabbix(query)
@@ -61,7 +49,7 @@ class SwitchResolver:
         if zabbix_match:
             return zabbix_match
 
-        raise LookupError(f"Unable to resolve switch '{query}' from inventory or Zabbix.")
+        raise LookupError(f"Unable to resolve switch '{query}' from Zabbix.")
 
     def resolve_matched_l3(
         self,
@@ -82,7 +70,7 @@ class SwitchResolver:
                     None,
                     "configured L3 override "
                     f"{source_subnet} -> {l3_ip} matched {switch.host}, "
-                    "but the L3 candidate was not found in Zabbix/inventory",
+                    "but the L3 candidate was not found in Zabbix",
                 )
             return resolved, f"configured override {source_subnet} -> {l3_ip}"
 
@@ -94,11 +82,11 @@ class SwitchResolver:
             existing = self._resolve_existing_l3_candidate(derived_ip)
             if existing:
                 return existing, "switch IP is already in L3 subnet (10.1.1.X)"
-            return None, f"derived L3 candidate {derived_ip} was not found in Zabbix/inventory"
+            return None, f"derived L3 candidate {derived_ip} was not found in Zabbix"
 
         resolved = self._resolve_existing_l3_candidate(derived_ip)
         if not resolved:
-            return None, f"derived L3 candidate {derived_ip} was not found in Zabbix/inventory"
+            return None, f"derived L3 candidate {derived_ip} was not found in Zabbix"
         return resolved, f"derived from {switch.host} via 10.7.X.Y -> 10.1.1.X"
 
     def _resolve_from_zabbix(self, query: str) -> SwitchRecord | None:
@@ -212,19 +200,10 @@ class SwitchResolver:
         )
 
     def _resolve_existing_l3_candidate(self, ip_address: str) -> SwitchRecord | None:
-        inventory_match = self._resolve_ip_from_inventory(ip_address)
-        if inventory_match:
-            return inventory_match
         try:
             return self._resolve_ip_from_zabbix(ip_address)
         except RuntimeError:
             return None
-
-    def _resolve_ip_from_inventory(self, ip_address: str) -> SwitchRecord | None:
-        for switch in self._inventory:
-            if switch.host == ip_address:
-                return switch
-        return None
 
     def _derive_l3_from_overrides(self, host: str) -> tuple[str, str] | None:
         if not self._l3_subnet_overrides:
@@ -247,17 +226,6 @@ class SwitchResolver:
         if chosen_network is None or chosen_l3_ip is None:
             return None
         return chosen_l3_ip, str(chosen_network)
-
-
-def _normalize_inventory_switch_vendor(switch: SwitchRecord) -> SwitchRecord:
-    model = str(switch.name or "").strip().casefold().split(".", 1)[0]
-    if switch.vendor == "snr" and re.match(r"^(?:snr-)?s5\d", model):
-        return replace(switch, vendor="snr_s5xxx")
-    if switch.vendor == "snr" and re.match(r"^(?:snr-)?s2970", model):
-        return replace(switch, vendor="snr_s2970")
-    if switch.vendor in {"generic_telnet", "eltex_mes"} and model.startswith("ltp-"):
-        return replace(switch, vendor="ltp")
-    return switch
 
 
 def _zabbix_login(client: ZabbixAPI, config: AppConfig) -> None:
