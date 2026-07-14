@@ -4,7 +4,7 @@ This project is a CLI tool for tracing VLAN paths across mixed-vendor switches a
 
 ## What It Does
 
-- Resolves switches by name/alias/IP (Zabbix lookup + inventory).
+- Resolves switches by name/alias/IP via Zabbix.
 - Probes switch connectivity and captures full Telnet session logs.
 - Looks up MAC addresses on supported vendors.
 - Finds a free VLAN on L3 switches using vendor-specific rules.
@@ -15,25 +15,26 @@ Supported vendor drivers in current code:
 
 - `cisco_ios`
 - `snr`
+- `snr_s2970` (`SNR-S2970*` series)
+- `snr_s5xxx`
 - `eltex_mes`
 - `arista`
-- `bdcom` (kinda)
 - `bdcom_gpon` (`bdcom.gp3600` / `bdcom.gpon`, creates GPON ONU VLAN profiles)
 - `fd160`
-- `gr_ep_olt1` (`GR-EP-OLT1-4`, local auth only)
-- `gr_ep_olt2` (`GR-EP-OLT2-8-2AC`, VLAN 111 MAC tracing)
-- `generic_telnet` (fallback for basic session/probe use)
+- `GR-EP-OLT1-4` local auth only
+- `GR-EP-OLT2-8-2AC`, VLAN 111 MAC tracing
+- `generic_telnet` (fallback)
 
 ## Requirements
 
 - Python 3.10+
 - Network access to target switches over Telnet
-- (Optional) Zabbix API access if Zabbix resolution is enabled
+- Zabbix API access if Zabbix resolution is enabled
 
 ## Installation
 
 ```powershell
-cd C:\path\to\vlan
+cd C:\path\to\repo
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -41,12 +42,8 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Create your local config and environment files:
-
-```powershell
-Copy-Item config.example.yaml config.yaml
-Copy-Item .env.example .env
-```
+Copy .env.example to .env and fill in with your credentials.
+Copy config.example.yaml to config.yaml and fill in with your working constraints.
 
 ### 1) `.env`
 
@@ -75,19 +72,19 @@ VLAN_ZABBIX_API_TOKEN=your_api_token
 log_directory: logs
 
 telnet:
-  username_env: VLAN_TELNET_USERNAME
-  password_env: VLAN_TELNET_PASSWORD
-  secret_env: VLAN_TELNET_SECRET
+  username_env: TELNET_USERNAME
+  password_env: TELNET_PASSWORD
+  secret_env: TELNET_SECRET
   port: 23
   timeout_seconds: 20
   global_delay_factor: 1.5
 
 zabbix:
   enabled: true
-  url_env: VLAN_ZABBIX_URL
-  api_token_env: VLAN_ZABBIX_API_TOKEN
-  username_env: VLAN_ZABBIX_USERNAME
-  password_env: VLAN_ZABBIX_PASSWORD
+  url_env: ZABBIX_URL
+  api_token_env: ZABBIX_API_TOKEN
+  username_env: ZABBIX_USERNAME
+  password_env: ZABBIX_PASSWORD
   search_field: host
 
 l3_mapping:
@@ -102,14 +99,10 @@ l3_mapping:
       l3_ip: 10.1.1.8
 
 vlan_ranges:
-  - start: 116
-    end: 299
-  - start: 1025
-    end: 1299
-
-sites: []
-inventory: []
-vendors: {}
+  - start: 200
+    end: 300
+  - start: 1200
+    end: 1300
 ```
 
 Notes:
@@ -122,60 +115,45 @@ Notes:
 ## Usage
 
 ```text
-main.py [-h] [--confirm-steps] [--debug]
-        {resolve,probe,trace-mac,find-vlan,plan,deploy} ...
+main.py [-h] [--nodebug] {resolve,probe,mac,find-vlan,plan,deploy} ...
 
-main.py probe SWITCH [--l3 L3_SWITCH_NAME_OR_IP] [--debug]
-main.py find-vlan L3_SWITCH_NAME_OR_IP [--debug]
-main.py plan DEST_SWITCH [DEST_PORT] [--l3 L3_SWITCH] [--vlan VLAN_ID] [--confirm-steps] [--debug]
-main.py deploy DEST_SWITCH [DEST_PORT] [--l3 L3_SWITCH] [--vlan VLAN_ID] [--confirm-steps] [--debug]
+main.py probe SWITCH [--l3 L3_SWITCH_NAME_OR_IP]
+main.py find-vlan L3_SWITCH_NAME_OR_IP
+main.py plan DEST_SWITCH [DEST_PORT] [--l3 L3_SWITCH] [--vlan VLAN_ID]
+main.py deploy DEST_SWITCH [DEST_PORT] [--l3 L3_SWITCH] [--vlan VLAN_ID]
 ```
 
 Commands:
 
 - `resolve`: Resolve a switch name/alias/IP to the final host record the tool will use.
-- `probe`: Open a live session to a switch, run probe commands, and verify prompt/session behavior.
-- `trace-mac`: Search a switch MAC table for a specific MAC and show where it is learned.
-- `find-vlan`: Find the first free VLAN on the selected L3 switch using vendor-specific logic.
+- `probe`: Verify switch connectivity (runs "show version")
+- `mac`: Search a switch MAC table for a specific MAC and show where it is learned.
+- `find-vlan`: Find the first free VLAN on the selected L3.
 - `plan`: Build a dry-run hop-by-hop VLAN path plan (what would be changed, without applying).
 - `deploy`: Execute the hop-by-hop VLAN path changes live on the traced switches.
 
 | flag | what it does |
 | --- | --- |
 | `-h`, `--help` | Show CLI help. |
-| `--confirm-steps` | Interactive safety mode: ask before each switch connection and command. Global flag; `plan`/`deploy` also accept it after subcommand. |
-| `--debug` | Print live debug output for connections and command execution. Global flag; `probe`/`find-vlan`/`plan`/`deploy` also accept command-local `--debug`. |
+| `--nodebug` | Quiet mode: hide live switch connect/command output. Still prints chosen VLAN and the change summary. Live output is on by default. |
 | `--l3 L3_SWITCH` | Manually override L3 switch selection. |
 | `--vlan VLAN_ID` | Use a fixed VLAN instead of automatic free-VLAN selection in `deploy` and `plan`. |
 
 Notes:
 
-- `resolve` and `trace-mac` have no command-specific flags (besides global flags).
-- `DEST_PORT` is optional for `plan`/`deploy`; if omitted, the tool asks the matched L3 switch for `show ip arp <destination IP>` and uses that traceable ARP MAC. Destination self-MAC discovery remains a fallback if ARP does not return a usable MAC.
+- `DEST_PORT` is optional for `plan`/`deploy`; if omitted, the tool asks the matched L3 switch for `show ip arp <destination IP>` and uses that MAC. Destination self-MAC discovery remains a fallback if ARP does not return a usable MAC.
 - In `plan`/`deploy`, if `--vlan` is omitted the tool auto-selects a free VLAN from configured ranges.
-- For BDCOM OLT safety, deploy/trace aborts when downlink resolves to ONU terminal-style interfaces (`eponX/Y:Z` or `gponX/Y:Z`).
+- On OLT devices, deploy/trace aborts when downlink resolves to ONU terminal-style interfaces (`gponX/Y:Z`).
 
 ## Logs
 
 - Session logs are written to `log_directory` (default: `logs/`).
 - Filenames are generated as `<host>_YYYYMMDD_HHMMSS.log`.
 
-## Optional Helper Script
-
-The repository also contains `zabbix_name_ip_resolver.py` for direct Zabbix host/IP lookup.
-
-Examples:
-
-```powershell
-python zabbix_name_ip_resolver.py hostname-to-ip SWITCH_QUERY
-python zabbix_name_ip_resolver.py ip-to-hostname 10.1.1.10
-python zabbix_name_ip_resolver.py search PARTIAL_NAME
-```
-
 ## Troubleshooting
 
 - `Required setting ... is missing`: check `.env` variable names and values.
-- `Unable to auto-match L3 ...`: provide `--l3` explicitly.
+- `Unable to auto-match L3 ...`: provide `--l3` explicitly or add in config.yaml as an override map.
 - `Unable to discover L3 trace MAC on VLAN 111`: verify L3 MAC-table output and VLAN visibility on that device.
 - `Vendor driver ... cannot ...`: platform support for that operation is not implemented for the selected vendor.
 - Telnet authentication/session errors: verify credentials, access ACLs, and session limits.
