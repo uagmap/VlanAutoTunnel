@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from vlan_tool.commands import deploy, find_vlan, plan, probe, resolve, trace_mac
+from vlan_tool.commands import find_vlan, mac, plan_deploy, probe, resolve
 from vlan_tool.config import load_config
 from vlan_tool.models import ProvisioningRequest
 
@@ -95,7 +95,7 @@ def main() -> int:
         if args.command == "probe":
             return probe.run(config, args.switch, args.l3_switch, debug=debug)
         if args.command == "mac":
-            return trace_mac.run(config, args.switch, args.mac, debug=debug)
+            return mac.run(config, args.switch, args.mac, debug=debug)
         if args.command == "find-vlan":
             return find_vlan.run(config, args.switch, debug=debug)
         if args.command == "plan":
@@ -105,7 +105,7 @@ def main() -> int:
                 destination_port=args.destination_port,
                 requested_vlan=args.vlan,
             )
-            return plan.run(config, request, debug=debug)
+            return plan_deploy.run(config, request, apply_changes=False, debug=debug)
         if args.command == "deploy":
             request = ProvisioningRequest(
                 l3_switch=args.l3_switch,
@@ -113,7 +113,7 @@ def main() -> int:
                 destination_port=args.destination_port,
                 requested_vlan=args.vlan,
             )
-            return deploy.run(config, request, debug=debug)
+            return plan_deploy.run(config, request, apply_changes=True, debug=debug)
 
         parser.error(f"Unsupported command: {args.command}")
         return 2
