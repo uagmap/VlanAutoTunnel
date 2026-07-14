@@ -86,10 +86,14 @@ def build_config_entry_attempts(vendor_key: str, preferred: str) -> list[str]:
         "cisco_ios": ["conf t", "configure terminal"],
         "arista": ["conf t", "configure terminal"],
         "snr": ["config terminal", "configure terminal"],
+        "snr_s2970": ["config", "configure terminal", "config terminal", "conf"],
         "snr_s5xxx": ["conf", "config", "configure terminal", "conf t", "config terminal"],
         "eltex_mes": ["configure terminal", "config terminal", "conf t"],
+        "fd160": ["conf", "configure terminal", "config terminal", "conf t"],
+        "gr_ep_olt2": ["config", "conf", "configure terminal", "config terminal", "conf t"],
         "ltp": ["configure terminal", "config terminal", "conf t", "conf"],
         "bdcom": ["conf", "configure terminal", "config terminal", "conf t"],
+        "bdcom_gpon": ["conf", "configure terminal", "config terminal", "conf t"],
     }.get(vendor_key, ["configure terminal", "conf t", "config terminal"])
     for candidate in candidates:
         if candidate.casefold() == preferred_text.casefold():
@@ -136,14 +140,17 @@ def flatten_actions_for_single_config_session(actions: list[str], vendor_key: st
         return payloads, False
 
     # For most vendors, trailing "exit" before final "end" is redundant and noisy.
-    if vendor_key != "bdcom":
+    if vendor_key not in {"bdcom", "bdcom_gpon", "fd160", "gr_ep_olt2", "snr_s2970"}:
         while payloads and payloads[-1].strip().casefold() == "exit":
             payloads.pop()
 
     result = [enter_config, *payloads]
-    if vendor_key == "bdcom":
-        # BDCOM does not support "end"; leave config hierarchy with "exit".
+    if vendor_key in {"bdcom", "bdcom_gpon", "gr_ep_olt2", "snr_s2970"}:
+        # These platforms leave config hierarchy with "exit" instead of "end".
         result.append("exit")
+    elif vendor_key == "fd160":
+        # FD160 persists changes only from config mode.
+        result.extend(["save", "exit"])
     else:
         result.append("end")
     return result, True
@@ -178,7 +185,7 @@ def extract_action_payload(commands: list[str]) -> tuple[list[str], str | None]:
 
 def is_config_enter_command(command: str) -> bool:
     text = command.strip().casefold()
-    return text in {"conf", "conf t", "configure terminal", "config terminal"}
+    return text in {"conf", "conf t", "configure terminal", "config terminal", "config"}
 
 
 def split_action_commands(action: str) -> list[str]:
@@ -212,6 +219,7 @@ def is_benign_vlan_exists_output(command: str, output: str) -> bool:
         "has been configured",
         "vlan exists",
         "already created",
+        "create vlan successfully",
     )
     return any(marker in text for marker in benign_markers)
 
@@ -229,14 +237,24 @@ def is_benign_command_failure(*, command: str, output: str, vendor_key: str) -> 
 
 
 def save_running_config_if_needed(*, session, switch: SwitchRecord, debug: bool) -> int:
-    if switch.vendor not in {"eltex_mes", "snr", "snr_s5xxx", "bdcom"}:
+    if switch.vendor not in {
+        "eltex_mes",
+        "snr",
+        "snr_s2970",
+        "snr_s5xxx",
+        "bdcom",
+        "bdcom_gpon",
+        "gr_ep_olt1",
+    }:
         return 0
 
     debug_note(debug, f"Saving running-config on {switch.name} ({switch.host})")
     executed = 0
 
-    if switch.vendor == "bdcom":
+    if switch.vendor in {"bdcom", "bdcom_gpon"}:
         save_commands = ["wr all", "write all", "wr", "write"]
+    elif switch.vendor == "gr_ep_olt1":
+        save_commands = ["system save all"]
     else:
         save_commands = ["write", "wr"]
 

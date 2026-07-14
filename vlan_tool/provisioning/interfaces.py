@@ -31,11 +31,18 @@ def discover_interface_description(*, session, driver, interface: str | None) ->
         output = run_vendor_show_command(session=session, vendor_key=driver.vendor_key, command=command)
         if not output or looks_like_invalid_command(output):
             continue
-        match = re.search(
-            r"^\s*description\s+(?P<description>.+)$",
-            output,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
+        if driver.vendor_key == "gr_ep_olt2":
+            match = re.search(
+                r"^\s*port-name\s+\d+\s+(?P<description>.+)$",
+                output,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+        else:
+            match = re.search(
+                r"^\s*description\s+(?P<description>.+)$",
+                output,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
         if not match:
             continue
         description = match.group("description").strip()
@@ -61,6 +68,15 @@ def build_interface_description_commands(vendor_key: str, interface: str) -> lis
             f"show run int {compact}",
             f"show run int {raw}",
         ]
+    if vendor_key == "snr_s2970":
+        from vlan_tool.vendors.snr_s2970 import format_snr_s2970_config_interface
+
+        port = format_snr_s2970_config_interface(interface)
+        return [
+            f"show run int {port}",
+            f"show running-config interface {port}",
+            f"show run interface {port}",
+        ]
     if vendor_key == "eltex_mes":
         return [f"show run int {raw.lower().replace(' ', '')}"]
     if vendor_key == "arista":
@@ -72,10 +88,25 @@ def build_interface_description_commands(vendor_key: str, interface: str) -> lis
             f"show run interface {compact}",
             f"show run int {compact}",
         ]
+    if vendor_key == "gr_ep_olt2":
+        from vlan_tool.vendors.gr_ep_olt2 import format_gr_ep_olt2_section_interface
+
+        section = format_gr_ep_olt2_section_interface(interface)
+        return [f"show current-config section {section}"]
     return [f"show run int {raw}"]
 
 
 def run_vendor_show_command(*, session, vendor_key: str, command: str) -> str:
-    if vendor_key in {"snr", "snr_s5xxx", "eltex_mes", "arista", "bdcom", "ltp"}:
+    if vendor_key in {
+        "snr",
+        "snr_s2970",
+        "snr_s5xxx",
+        "eltex_mes",
+        "arista",
+        "bdcom",
+        "fd160",
+        "gr_ep_olt2",
+        "ltp",
+    }:
         return session.run_timing(command)
     return session.run_show(command)

@@ -196,11 +196,21 @@ def pick_uplink_entry(entries: list[MacTableEntry]) -> MacTableEntry | None:
     return sorted(entries, key=score, reverse=True)[0]
 
 
-def is_sensitive_olt_terminal_interface(interface: str | None) -> bool:
+def is_sensitive_olt_terminal_interface(
+    interface: str | None,
+    *,
+    vendor_key: str | None = None,
+) -> bool:
     if not interface:
         return False
     normalized = interface.strip().casefold().replace(" ", "")
-    return bool(re.match(r"^(?:epon|gpon)\d+/\d+:\d+$", normalized))
+
+    if vendor_key == "gr_ep_olt1":
+        ge_match = re.match(r"^ge-?(\d+)$", normalized)
+        if ge_match and int(ge_match.group(1)) > 4:
+            return True
+
+    return bool(re.match(r"^(?:epon|gpon|pon|ont)\d", normalized))
 
 
 def discover_target_mac(

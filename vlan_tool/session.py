@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import os
 from pathlib import Path
 import re
 import time
@@ -19,13 +20,20 @@ DEFAULT_DEVICE_TYPES = {
     "arista": "arista_eos_telnet",
     "arista_eos": "arista_eos_telnet",
     "bdcom": "generic_telnet",
+    "bdcom_gpon": "generic_telnet",
     "cisco_ios": "cisco_ios_telnet",
     "generic_telnet": "generic_telnet",
+    "gr_ep_olt1": "generic_telnet",
+    "gr_ep_olt2": "generic_telnet",
     "snr": "generic_telnet",
+    "snr_s2970": "generic_telnet",
     "snr_s5xxx": "generic_telnet",
     "eltex_mes": "generic_telnet",
+    "fd160": "generic_telnet",
     "ltp": "generic_telnet",
 }
+LOCAL_AUTH_REQUIRED_VENDORS = {"gr_ep_olt1"}
+LOCAL_AUTH_DEFAULT_USERNAMES = {"gr_ep_olt1": "root"}
 
 TRANSIENT_TELNET_ERRORS = (ConnectionResetError, TimeoutError, OSError, EOFError)
 TELNET_USERNAME_PROMPT_RE = re.compile(
@@ -185,12 +193,13 @@ def open_switch_session(
             #    logging.basicConfig(level=logging.DEBUG)
 
 
+            username, password, secret = _resolve_telnet_credentials(config, switch)
             connection_kwargs = dict(
                 device_type=device_type,
                 host=switch.host,
-                username=config.telnet.username,
-                password=config.telnet.password,
-                secret=config.telnet.secret,
+                username=username,
+                password=password,
+                secret=secret,
                 port=config.telnet.port,
                 conn_timeout=config.telnet.timeout_seconds,
                 auth_timeout=config.telnet.timeout_seconds,
@@ -314,6 +323,48 @@ def _open_connection(device_type: str, connection_kwargs: dict):
     except TypeError:
         connection._try_session_preparation()
     return connection
+
+
+def _resolve_telnet_credentials(config: AppConfig, switch: SwitchRecord) -> tuple[str, str, str | None]:
+    vendor_key = re.sub(r"[^A-Za-z0-9]+", "_", switch.vendor or "").strip("_").upper()
+    username_override = _first_env_value(
+        f"VLAN_{vendor_key}_TELNET_USERNAME",
+        f"VLAN_{vendor_key}_USERNAME",
+    )
+    password_override = _first_env_value(
+        f"VLAN_{vendor_key}_TELNET_PASSWORD",
+        f"VLAN_{vendor_key}_PASSWORD",
+    )
+    secret_override = _first_env_value(
+        f"VLAN_{vendor_key}_TELNET_SECRET",
+        f"VLAN_{vendor_key}_SECRET",
+    )
+
+    if switch.vendor in LOCAL_AUTH_REQUIRED_VENDORS:
+        username = username_override or LOCAL_AUTH_DEFAULT_USERNAMES.get(switch.vendor) or config.telnet.username
+        if not password_override:
+            raise RuntimeError(
+                f"Vendor '{switch.vendor}' requires local Telnet credentials. "
+                f"Set VLAN_{vendor_key}_TELNET_PASSWORD or VLAN_{vendor_key}_PASSWORD in .env."
+            )
+        return username, password_override, secret_override
+
+    return (
+        username_override or config.telnet.username,
+        password_override or config.telnet.password,
+        secret_override if secret_override is not None else config.telnet.secret,
+    )
+
+
+def _first_env_value(*names: str) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value is None:
+            continue
+        text = value.strip()
+        if text:
+            return text
+    return None
 
 
 def _is_eltex_legacy_model(switch: SwitchRecord) -> bool:

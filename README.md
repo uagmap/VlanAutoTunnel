@@ -18,6 +18,10 @@ Supported vendor drivers in current code:
 - `eltex_mes`
 - `arista`
 - `bdcom` (kinda)
+- `bdcom_gpon` (`bdcom.gp3600` / `bdcom.gpon`, creates GPON ONU VLAN profiles)
+- `fd160`
+- `gr_ep_olt1` (`GR-EP-OLT1-4`, local auth only)
+- `gr_ep_olt2` (`GR-EP-OLT2-8-2AC`, VLAN 111 MAC tracing)
 - `generic_telnet` (fallback for basic session/probe use)
 
 ## Requirements
@@ -52,6 +56,11 @@ Set credentials and API settings in `.env`:
 VLAN_TELNET_USERNAME=your_username
 VLAN_TELNET_PASSWORD=your_password
 VLAN_TELNET_SECRET=your_enable_secret
+
+# Optional vendor-local override for GR-EP-OLT1-4.
+# Username defaults to root when omitted; password is required for this vendor.
+# VLAN_GR_EP_OLT1_TELNET_USERNAME=root
+# VLAN_GR_EP_OLT1_TELNET_PASSWORD=local_password
 
 VLAN_ZABBIX_URL=https://zabbix.example.com/zabbix
 VLAN_ZABBIX_API_TOKEN=your_api_token

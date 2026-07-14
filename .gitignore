@@ -7,9 +7,11 @@ __pycache__/
 # environment
 .env
 config.yaml
+.cursor/
 
 # local artifacts / large files
 CONTINUITY.md
 *.log
 *.txt
+test*.py
 CODE_GUIDE.md

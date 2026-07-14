@@ -58,6 +58,13 @@ class BDCOMDriver(VendorDriver):
         return "BDCOM driver with VLAN/MAC tracing support for switch uplinks."
 
 
+class BDCOMGPONDriver(BDCOMDriver):
+    vendor_key = "bdcom_gpon"
+
+    def summary(self) -> str:
+        return "BDCOM GPON driver with ONU VLAN profile creation support."
+
+
 def normalize_bdcom_mac(mac_address: str) -> str:
     compact = re.sub(r"[^0-9A-Fa-f]", "", mac_address)
     if len(compact) != 12:
