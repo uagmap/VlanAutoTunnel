@@ -12,7 +12,6 @@ config.yaml
 # local artifacts / large files
 CONTINUITY.md
 *.log
-*.txt
 test*.py
 CODE_GUIDE.md
 generate_l3_overrides.py
