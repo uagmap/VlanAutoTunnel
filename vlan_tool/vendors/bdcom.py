@@ -89,8 +89,31 @@ def normalize_bdcom_interface(interface: str) -> str:
     )
     for source, target in replacements:
         if normalized.startswith(source):
-            return normalized.replace(source, target, 1)
+            normalized = normalized.replace(source, target, 1)
+            break
+    # MAC table often shows ONU UNI as gpon0/6:49-1; treat as gpon0/6:49.
+    onu_uni = re.match(r"^((?:epon|gpon)\d+/\d+:\d+)-\d+$", normalized)
+    if onu_uni:
+        return onu_uni.group(1)
     return normalized
+
+
+def bdcom_trunk_interface(interface: str) -> str:
+    """Parent trunk port for VLAN allow / show vlan (gpon0/6:49 -> gpon0/6)."""
+    normalized = normalize_bdcom_interface(interface)
+    parent = re.match(r"^((?:epon|gpon)\d+/\d+)(?::\d+)?$", normalized)
+    if parent:
+        return parent.group(1)
+    return normalized
+
+
+def format_bdcom_config_interface(interface: str) -> str:
+    """Config-mode interface name (gpon0/6:49 -> 'gpon 0/6')."""
+    trunk = bdcom_trunk_interface(interface)
+    pon = re.match(r"^(epon|gpon)(\d+/\d+)$", trunk)
+    if pon:
+        return f"{pon.group(1)} {pon.group(2)}"
+    return interface.strip()
 
 
 def format_bdcom_cli_interface(interface: str) -> str:

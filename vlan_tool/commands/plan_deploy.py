@@ -25,11 +25,17 @@ def run(
         )
         if not discovered:
             raise RuntimeError(
-                "Unable to auto-discover destination MAC from requested destination port. "
-                "Verify the port and MAC visibility."
+                "Unable to auto-discover a MAC on the requested destination port "
+                "and switch self-MAC fallback also failed. "
+                "Verify the port or provide a reachable MAC."
             )
         effective_request = replace(request, target_mac=discovered)
         print(f"Auto-discovered target MAC ({discovery_source}): {discovered}")
+        if "no MAC on port" in discovery_source:
+            print(
+                f"Note: no client MAC on {request.destination_port}; "
+                "using switch self-MAC for path tracing. Requested port will still be tagged."
+            )
 
     for line in execute_live_path_plan(
         config,

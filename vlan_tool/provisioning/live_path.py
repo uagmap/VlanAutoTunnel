@@ -110,6 +110,7 @@ def execute_live_path_plan(
             vlan_ranges=ranges,
             requested_vlan=request.requested_vlan,
         )
+        print(f"Selected VLAN: {chosen_vlan} ({chosen_vlan_reason})")
         if not l3_trace_mac:
             l3_trace_mac = _discover_l3_trace_mac(
                 session=session,
@@ -400,6 +401,7 @@ def execute_live_path_plan(
                 )
 
             if is_destination and request.destination_port:
+                downlink_interface = request.destination_port
                 target_entries = current_driver.lookup_mac(session, target_mac)
                 destination_entry = _pick_downlink_entry(target_entries)
                 if destination_entry:
@@ -411,7 +413,24 @@ def execute_live_path_plan(
                             f"not requested port {request.destination_port}."
                         )
                 else:
-                    notes.append("Destination MAC was not visible on destination switch during this trace.")
+                    notes.append(
+                        "Destination MAC was not visible on destination switch during this trace; "
+                        "still tagging requested port."
+                    )
+                downlink_tagged = _snapshot_interface_tagged(
+                    driver=current_driver,
+                    vlan_id=chosen_vlan,
+                    interface=downlink_interface,
+                    snapshot=snapshot,
+                )
+                if downlink_tagged is False:
+                    actions.append(
+                        _build_vlan_tag_action(
+                            vendor_key=current_driver.vendor_key,
+                            interface=downlink_interface,
+                            vlan_id=chosen_vlan,
+                        )
+                    )
             elif not is_destination:
                 downlink_entries = current_driver.lookup_mac(session, target_mac)
                 downlink_entry = _pick_downlink_entry(downlink_entries)

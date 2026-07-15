@@ -10,6 +10,7 @@ import re
 from vlan_tool.provisioning.actions import to_snr_ethernet_name
 from vlan_tool.provisioning.common import looks_like_invalid_command
 from vlan_tool.provisioning.ltp import extract_ltp_tagged_interfaces_from_vlan_block, extract_ltp_vlan_block
+from vlan_tool.vendors.bdcom import bdcom_trunk_interface
 from vlan_tool.vendors.gr_ep_olt2 import gr_ep_olt2_interface_tagged, gr_ep_olt2_vlan_exists
 from vlan_tool.vendors.snr_s2970 import snr_s2970_interface_tagged, snr_s2970_vlan_exists
 
@@ -105,6 +106,22 @@ def snapshot_interface_tagged(*, driver, vlan_id: int, interface: str | None, sn
         return False
 
     wanted = driver.normalize_interface(interface)
+    if driver.vendor_key in {"bdcom", "bdcom_gpon"}:
+        wanted = bdcom_trunk_interface(interface)
+        for line in snapshot.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parts = re.split(r"\s+", stripped, maxsplit=1)
+            if len(parts) < 2:
+                continue
+            interface_token = parts[0]
+            if bdcom_trunk_interface(interface_token) != wanted:
+                continue
+            attributes = parts[1].casefold()
+            return "tagged" in attributes
+        return False
+
     if driver.vendor_key == "snr_s5xxx":
         for match in re.finditer(
             r"(?P<intf>[A-Za-z]+[0-9]+(?:/[0-9]+)*)\((?P<mode>[TtUu])\)",
@@ -139,19 +156,6 @@ def snapshot_interface_tagged(*, driver, vlan_id: int, interface: str | None, sn
             expanded.extend(expand_eltex_interface_token(token))
         return any(driver.normalize_interface(token) == wanted for token in expanded)
 
-    if driver.vendor_key == "bdcom":
-        for line in snapshot.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            parts = re.split(r"\s+", stripped, maxsplit=1)
-            if len(parts) < 2:
-                continue
-            interface_token = parts[0]
-            if driver.normalize_interface(interface_token) != wanted:
-                continue
-            attributes = parts[1].casefold()
-            return "tagged" in attributes
     if driver.vendor_key == "ltp":
         vlan_block = extract_ltp_vlan_block(running_config=snapshot, vlan_id=vlan_id)
         if vlan_block is None:

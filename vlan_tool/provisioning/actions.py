@@ -103,8 +103,10 @@ def build_vlan_tag_action(*, vendor_key: str, interface: str, vlan_id: int) -> s
             f"tagged {interface} ; exit ; commit ; exit"
         )
     if vendor_key in {"bdcom", "bdcom_gpon"}:
+        from vlan_tool.vendors.bdcom import format_bdcom_config_interface
+
         return (
-            f"conf ; interface {interface} ; "
+            f"conf ; interface {format_bdcom_config_interface(interface)} ; "
             f"switchport trunk vlan-allowed add {vlan_id} ; exit"
         )
     return f"allow VLAN {vlan_id} on {interface} (vendor-specific command required)"

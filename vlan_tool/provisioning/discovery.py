@@ -242,10 +242,23 @@ def discover_target_mac(
                 )
             entries = driver.lookup_interface_macs(session, request.destination_port)
             print(f"Session log (destination MAC discovery): {session.session_log}")
-            if not entries:
-                return None, f"port {request.destination_port}"
-            selected = select_preferred_mac_entry(entries)
-            return selected.mac_address, f"port {request.destination_port}"
+            if entries:
+                selected = select_preferred_mac_entry(entries)
+                return selected.mac_address, f"port {request.destination_port}"
+
+            # Empty ONU/port is fine: keep destination_port for tagging, walk path via switch MAC.
+            discovered = discover_switch_self_mac(
+                session=session,
+                driver=driver,
+                switch=destination_switch,
+            )
+            print(f"Session log (destination self-MAC fallback): {session.session_log}")
+            if discovered:
+                return (
+                    discovered,
+                    f"switch self MAC (no MAC on port {request.destination_port})",
+                )
+            return None, f"port {request.destination_port} (empty) and switch self MAC"
 
         discovered = discover_switch_self_mac(
             session=session,
@@ -298,7 +311,7 @@ def discover_switch_self_mac(*, session, driver, switch: SwitchRecord) -> str | 
             require_any_keywords=("self",),
         )
 
-    if driver.vendor_key == "bdcom":
+    if driver.vendor_key in {"bdcom", "bdcom_gpon"}:
         version_output = session.run_timing("show version")
         discovered_from_version = extract_bdcom_base_mac_from_version(version_output)
         if discovered_from_version:
