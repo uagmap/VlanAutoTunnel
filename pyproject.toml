@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlan-tool"
+version = "0.1.0"
+description = "VLAN tunnel automation CLI"
+requires-python = ">=3.10"
+dependencies = [
+  "netmiko>=4.4.0",
+  "pyzabbix>=1.3.1",
+  "PyYAML>=6.0",
+  "rich>=13.0",
+]
+
+[project.scripts]
+vlan = "vlan_tool.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vlan_tool*"]

@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import re
+
+from vlan_tool.models import InterfaceStatus, MacTableEntry
+from vlan_tool.session import SwitchSession
+from vlan_tool.vendors.base import (
+    CLI_ERROR_STRICT_RE as CLI_ERROR_RE,
+    DriverCapabilities,
+    VendorDriver,
+    compact_mac,
+    enter_enable_mode,
+    format_mac,
+    mac_on_line_containing,
+)
+
+
+MAC_LINE_RE = re.compile(
+    r"^\s*(?P<vlan>\d+)\s+(?P<mac>[0-9a-fA-F.:-]+)\s+(?P<entry_type>\S+)\s+(?P<interface>\S+)\s*$"
+)
+INTERFACE_LINE_RE = re.compile(
+    r"^(?P<interface>[A-Za-z]+[0-9]+(?:/[0-9]+)*)\s+"
+    r"(?P<port_type>\S+)\s+"
+    r"(?P<pvid>\S+)\s+"
+    r"(?P<mode>\S+)\s+"
+    r"(?P<status>\S+)\s+"
+    r"(?P<reason>\S+)\s+"
+    r"(?P<speed>\S+)\s+"
+    r"(?P<port_ch>\S+)\s*"
+    r"(?P<description>.*)$"
+)
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+MORE_PROMPT_RE = re.compile(r"--\s*more\s*--", re.IGNORECASE)
+
+
+class SNRS5xxxDriver(VendorDriver):
+    vendor_key = "snr_s5xxx"
+    capabilities = DriverCapabilities(mac_lookup=True, mac_lookup_by_interface=True)
+
+    def prepare_session(self, session: SwitchSession) -> None:
+        enter_enable_mode(session)
+        # eNOS/S5: terminal width may re-enable paging behavior on some versions.
+        _run_snr_s5_command(session, "terminal length 0")
+
+    def lookup_mac(self, session: SwitchSession, mac_address: str) -> list[MacTableEntry]:
+        wanted = compact_mac(mac_address)
+        output = _run_snr_s5_command(
+            session,
+            f"show mac address-table address {format_mac(wanted, sep='.', group=4)}"
+        )
+        if CLI_ERROR_RE.search(output) or not output.strip():
+            output = _run_snr_s5_command(session, "show mac address-table")
+        return _parse_snr_s5_mac_lines(output, wanted_mac=wanted)
+
+    def lookup_interface_macs(self, session: SwitchSession, interface: str) -> list[MacTableEntry]:
+        lookup_interface = format_snr_s5_cli_interface(interface)
+        outputs: list[str] = []
+        for command in (
+            f"show mac address-table interface {lookup_interface}",
+            f"show mac address-table dynamic interface {lookup_interface}",
+            "show mac address-table",
+        ):
+            output = _run_snr_s5_command(session, command)
+            outputs.append(output)
+            if command == "show mac address-table":
+                break
+            if not CLI_ERROR_RE.search(output) and output.strip():
+                break
+
+        wanted_interface = self.normalize_interface(interface)
+        for output in outputs:
+            entries = _parse_snr_s5_mac_lines(output, wanted_interface=wanted_interface)
+            if entries:
+                return entries
+        return []
+
+    def get_interface_statuses(self, session: SwitchSession) -> dict[str, InterfaceStatus]:
+        output = _run_snr_s5_command(session, "show int brief")
+        if CLI_ERROR_RE.search(output):
+            output = _run_snr_s5_command(session, "show interface brief")
+
+        results: dict[str, InterfaceStatus] = {}
+        last_interface_key: str | None = None
+        for line in output.splitlines():
+            stripped = line.rstrip()
+            if not stripped or stripped.lstrip().startswith(("-", "Codes:", "Ethernet", "Interface")):
+                continue
+
+            match = INTERFACE_LINE_RE.match(stripped)
+            if match:
+                interface = match.group("interface")
+                mode_text = match.group("mode").strip().casefold()
+                pvid_text = match.group("pvid").strip()
+                access_vlan = int(pvid_text) if pvid_text.isdigit() and mode_text == "access" else None
+                mode = "trunk" if mode_text == "trunk" else ("access" if mode_text == "access" else mode_text)
+                description = match.group("description").strip() or None
+                normalized = self.normalize_interface(interface)
+                results[normalized] = InterfaceStatus(
+                    interface=interface,
+                    normalized_interface=normalized,
+                    mode=mode,
+                    access_vlan=access_vlan,
+                    admin_state=match.group("status").strip(),
+                    link_state=match.group("reason").strip(),
+                    description=description,
+                    raw_line=line,
+                )
+                last_interface_key = normalized
+                continue
+
+            if last_interface_key and results.get(last_interface_key):
+                continuation = stripped.strip()
+                if continuation and not continuation.startswith("-"):
+                    current_description = results[last_interface_key].description or ""
+                    joined = f"{current_description} {continuation}".strip()
+                    results[last_interface_key].description = joined or None
+
+        return results
+
+    def normalize_interface(self, interface: str) -> str:
+        return normalize_snr_s5_interface(interface)
+
+    def summary(self) -> str:
+        return "SNR S5xxx driver (eNOS-style CLI) with MAC lookup and interface brief parsing."
+
+
+def normalize_snr_s5_interface(interface: str) -> str:
+    normalized = interface.strip().lower().replace(" ", "")
+    replacements = (
+        ("tengigabitethernet", "xe"),
+        ("xge", "xe"),
+        ("gigabitethernet", "ge"),
+        ("ethernet", "eth"),
+        ("vlan", "vlan"),
+    )
+    for source, target in replacements:
+        if normalized.startswith(source):
+            return normalized.replace(source, target, 1)
+    return normalized
+
+
+def format_snr_s5_cli_interface(interface: str) -> str:
+    return normalize_snr_s5_interface(interface)
+
+
+def extract_snr_s5_vlan_mac_from_version(output: str) -> str | None:
+    return mac_on_line_containing(output, "vlan mac")
+
+
+def _parse_snr_s5_mac_lines(
+    output: str,
+    *,
+    wanted_mac: str | None = None,
+    wanted_interface: str | None = None,
+) -> list[MacTableEntry]:
+    entries: list[MacTableEntry] = []
+    for line in output.splitlines():
+        match = MAC_LINE_RE.match(line.rstrip())
+        if not match:
+            continue
+        parsed_mac = compact_mac(match.group("mac"))
+        if wanted_mac and parsed_mac != wanted_mac:
+            continue
+        parsed_interface = match.group("interface")
+        if wanted_interface and normalize_snr_s5_interface(parsed_interface) != wanted_interface:
+            continue
+        entries.append(
+            MacTableEntry(
+                vlan_id=int(match.group("vlan")),
+                mac_address=match.group("mac"),
+                interface=parsed_interface,
+                entry_type=match.group("entry_type"),
+                raw_line=line,
+            )
+        )
+    return entries
+
+
+def _run_snr_s5_command(session: SwitchSession, command: str) -> str:
+    output = session.run_timing(command)
+    output = _collect_paginated_output(session, output)
+    return _strip_terminal_artifacts(output)
+
+
+def _collect_paginated_output(session: SwitchSession, first_chunk: str) -> str:
+    output = first_chunk or ""
+    chunk = first_chunk or ""
+    page_reads = 0
+    while _contains_more_prompt(chunk):
+        # Advance pager by one screen and keep collecting until prompt returns.
+        chunk = session.run_timing(" ", confirm_label="advance pager")
+        output += chunk
+        page_reads += 1
+        if page_reads > 300:
+            raise RuntimeError("Pager did not terminate while collecting command output on SNR-S5.")
+    return output
+
+
+def _contains_more_prompt(text: str) -> bool:
+    if not text:
+        return False
+    cleaned = _strip_ansi_only(text).casefold()
+    return bool(MORE_PROMPT_RE.search(cleaned))
+
+
+def _strip_terminal_artifacts(text: str) -> str:
+    cleaned = _strip_ansi_only(text).replace("\x07", "")
+    cleaned = re.sub(r"--\s*More\s*--", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def _strip_ansi_only(text: str) -> str:
+    if not text:
+        return ""
+    return ANSI_ESCAPE_RE.sub("", text)

@@ -1,0 +1,47 @@
+log_directory: logs
+
+# Credentials are loaded from environment variables.
+# The app automatically reads a .env file from this same directory.
+telnet:
+  username_env: VLAN_TELNET_USERNAME
+  password_env: VLAN_TELNET_PASSWORD
+  secret_env: VLAN_TELNET_SECRET
+  port: 23
+  timeout_seconds: 20
+  global_delay_factor: 1.5
+
+zabbix:
+  enabled: true
+  url_env: VLAN_ZABBIX_URL
+  # Prefer API token. If set, username/password are not required.
+  api_token_env: VLAN_ZABBIX_API_TOKEN
+  # Optional fallback when token is unavailable:
+  username_env: VLAN_ZABBIX_USERNAME
+  password_env: VLAN_ZABBIX_PASSWORD
+  search_field: host
+
+# Site conventions. The defaults below match a typical ISP access network and are
+# what the code uses when this block is omitted; change them to your numbering plan.
+site:
+  access_prefix: "10.20."   # access switches live in <access_prefix>X.Y
+  l3_prefix: "10.30.1."     # their L3 gateway is <l3_prefix>X (same X)
+  management_vlan: 10       # VLAN where switch self-MACs are learned (path tracing)
+  f_port_vlan: 20           # shared client VLAN for F* port descriptions
+  f_port_alt_vlan: 21       # alternate shared VLAN (default for --vlan-alt)
+
+# Optional L3 mapping overrides for irregular topologies.
+# These rules are checked before the default mapping rule (see site above).
+# Use CIDR subnets on the left and an explicit L3 management IP on the right.
+l3_mapping:
+  overrides:
+    # - subnet: 10.20.30.0/24
+    #   l3_ip: 10.0.0.1
+
+# Global candidate ranges used for every L3 switch.
+# The workflow tries these ranges in order and fails only when all are full.
+# The numbers below are examples; set them to your free VLAN pools.
+vlan_ranges:
+  - start: 100
+    end: 199
+  - start: 1000
+    end: 1099
